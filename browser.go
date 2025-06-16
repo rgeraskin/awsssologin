@@ -109,8 +109,7 @@ func checkSuccessMessage(page *rod.Page, timeout time.Duration) error {
 	return nil
 }
 
-func automateBrowserLogin(deviceURL string, config *Config, logLevel log.Level) error {
-	log.SetLevel(logLevel)
+func automateBrowserLogin(deviceURL string, config *Config) error {
 
 	log.Info("Starting browser automation...")
 	timeout := time.Duration(config.TimeoutSeconds) * time.Second

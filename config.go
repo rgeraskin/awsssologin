@@ -47,8 +47,7 @@ func validateDeviceURL(url string) error {
 	return nil
 }
 
-func getCredentials(config *Config, logLevel log.Level) error {
-	log.SetLevel(logLevel)
+func getCredentials(config *Config) error {
 
 	// Username cascade: CLI -> ENV -> Interactive
 	if config.Username == "" {

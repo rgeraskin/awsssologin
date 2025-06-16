@@ -44,7 +44,7 @@ Credentials can be provided via:
 				return fmt.Errorf("invalid log level: %v", err)
 			}
 			log.SetLevel(logLevel)
-			return runSSO(&config, logLevel)
+			return runSSO(&config)
 		},
 	}
 
@@ -65,7 +65,7 @@ Credentials can be provided via:
 	}
 }
 
-func runSSO(config *Config, logLevel log.Level) error {
+func runSSO(config *Config) error {
 	log.Info("Starting AWS SSO login automation...")
 
 	// Step 0: Validate configuration and set defaults
@@ -80,7 +80,7 @@ func runSSO(config *Config, logLevel log.Level) error {
 	)
 
 	// Step 1: Get credentials
-	if err := getCredentials(config, logLevel); err != nil {
+	if err := getCredentials(config); err != nil {
 		return fmt.Errorf("failed to get credentials: %v", err)
 	}
 
@@ -89,14 +89,14 @@ func runSSO(config *Config, logLevel log.Level) error {
 		deviceURL = config.DeviceURL
 		log.Info("Using device URL from command line", "url", deviceURL)
 	} else {
-		deviceURL, scanner, err = readDeviceURLFromStdin(config, logLevel)
+		deviceURL, scanner, err = readDeviceURLFromStdin(config)
 		if err != nil {
 			return fmt.Errorf("failed to process stdin: %v", err)
 		}
 	}
 
 	// Step 3: Automate browser login
-	if err := automateBrowserLogin(deviceURL, config, logLevel); err != nil {
+	if err := automateBrowserLogin(deviceURL, config); err != nil {
 		return fmt.Errorf("browser automation failed: %v", err)
 	}
 
@@ -123,7 +123,7 @@ func continueReadingStdin(scanner *bufio.Scanner) error {
 	return scanner.Err()
 }
 
-func readDeviceURLFromStdin(config *Config, logLevel log.Level) (string, *bufio.Scanner, error) {
+func readDeviceURLFromStdin(config *Config) (string, *bufio.Scanner, error) {
 	log.Info("Reading AWS SSO output from stdin to find device URL...")
 
 	scanner := bufio.NewScanner(os.Stdin)
