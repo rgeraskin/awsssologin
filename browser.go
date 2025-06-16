@@ -138,8 +138,8 @@ func automateBrowserLogin(deviceURL string, config *Config, logLevel log.Level) 
 			log.Warn("Browser will be closed in 5 minutes because of error")
 			time.Sleep(5 * time.Minute)
 		}
-		if err := browser.Close(); err != nil {
-			log.Error("Failed to close browser", "error", err)
+		if closeErr := browser.Close(); closeErr != nil {
+			log.Error("Failed to close browser", "error", closeErr)
 		}
 	}()
 
