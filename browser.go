@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
-	"log"
+
+	"github.com/charmbracelet/log"
+
 	"time"
 
 	"github.com/go-rod/rod"
@@ -13,24 +15,111 @@ import (
 )
 
 const (
-	DefaultTimeout = 20 * time.Second
-	XPathUsername  = `//*[@id="awsui-input-0"]`
-	XPathPassword  = `//*[@id="awsui-input-1"]`
-	XPathTOTP      = `//*[@id="awsui-input-2"]`
-	XPathTOTPLink  = `//*[@id="main-container"]/div[2]/div/div/div[2]/div/form/awsui-form/div/div[2]/span/span/div[4]/div[2]/div/div/div/a`
-	XPathAllow1    = `//*[@id="cli_verification_btn"]/span`
-	XPathAllow2    = `//*[@id=":rl:"]/div[3]/div/div/div[2]/button/span`
-	XPathSuccess   = `//*[@id="alert-:r10:"]/div[1]`
+	XPathUsername = `//*[@id="awsui-input-0"]`
+	XPathPassword = `//*[@id="awsui-input-1"]`
+	XPathTOTP     = `//*[@id="awsui-input-2"]`
+	XPathAllow1   = `//*[@id="cli_verification_btn"]`
+	XPathAllow2   = `//*[@data-testid="allow-access-button"]`
+	XPathSuccess  = `//*[@data-analytics-alert="success"]`
 )
 
-func automateBrowserLogin(deviceURL string, config *Config) error {
-	log.Println("Starting browser automation...")
+// Helper function to find an element with consistent error handling
+func findElement(
+	page *rod.Page,
+	xpath string,
+	description string,
+	timeout time.Duration,
+) (*rod.Element, error) {
+	log.Debug("Looking for element", "description", description, "xpath", xpath)
+	element, err := page.Timeout(timeout).ElementX(xpath)
+	if err != nil {
+		return nil, fmt.Errorf("%s not found with XPath %s: %v", description, xpath, err)
+	}
+	log.Debug("Found element", "description", description, "xpath", xpath)
+	return element, nil
+}
+
+// Helper function to fill a field and submit the form
+func fillAndSubmitField(
+	page *rod.Page,
+	xpath string,
+	value string,
+	description string,
+	timeout time.Duration,
+) error {
+	field, err := findElement(page, xpath, description, timeout)
+	if err != nil {
+		return err
+	}
+
+	log.Debug("Filling field", "description", description)
+	if err := field.Input(value); err != nil {
+		return fmt.Errorf("failed to input %s: %v", description, err)
+	}
+
+	log.Debug("Submitting form", "description", description)
+	if err := field.Type(input.Enter); err != nil {
+		return fmt.Errorf("failed to submit %s form: %v", description, err)
+	}
+
+	return nil
+}
+
+// Helper function to click a button with consistent error handling
+func clickButton(page *rod.Page, xpath string, description string, timeout time.Duration) error {
+	button, err := findElement(page, xpath, description, timeout)
+	if err != nil {
+		return err
+	}
+
+	log.Debug("Clicking button", "description", description)
+	if err := button.Click(proto.InputMouseButtonLeft, 1); err != nil {
+		return fmt.Errorf("failed to click %s: %v", description, err)
+	}
+
+	// time.Sleep(3 * time.Second)
+	return nil
+}
+
+// Helper function to get TOTP code based on configuration
+func getTOTPCode(config *Config) (string, error) {
+	if config.InteractiveTOTP {
+		return promptForInput("Enter TOTP code: ", false)
+	}
+
+	log.Debug("Generating TOTP code from secret...")
+	return totp.GenerateCode(config.TOTPSecret, time.Now())
+}
+
+// Helper function to check for success message
+func checkSuccessMessage(page *rod.Page, timeout time.Duration) error {
+	log.Debug("Checking for success message...")
+	_, err := page.Timeout(timeout).ElementX(XPathSuccess)
+	if err != nil {
+		return fmt.Errorf("success message not found with XPath %s: %v", XPathSuccess, err)
+	}
+
+	// successText, err := successElement.Text()
+	// if err != nil {
+	// 	return fmt.Errorf("failed to get success message text: %v", err)
+	// }
+
+	// log.Debug("Success page found with text", "text", successText)
+	log.Debug("Success message found")
+	return nil
+}
+
+func automateBrowserLogin(deviceURL string, config *Config, logLevel log.Level) error {
+	log.SetLevel(logLevel)
+
+	log.Info("Starting browser automation...")
+	timeout := time.Duration(config.TimeoutSeconds) * time.Second
 
 	// Setup launcher
 	if config.ShowBrowser {
-		log.Println("Browser will be visible")
+		log.Info("Browser will be visible")
 	} else {
-		log.Println("Running browser in headless mode")
+		log.Info("Running browser in headless mode")
 	}
 	l := launcher.New().Headless(!config.ShowBrowser)
 
@@ -45,137 +134,75 @@ func automateBrowserLogin(deviceURL string, config *Config) error {
 		return fmt.Errorf("failed to connect to browser at %s: %v", url, err)
 	}
 	defer func() {
+		if config.ShowBrowser && err != nil {
+			log.Warn("Browser will be closed in 5 minutes because of error")
+			time.Sleep(5 * time.Minute)
+		}
 		if err := browser.Close(); err != nil {
-			log.Printf("Warning: failed to close browser: %v", err)
+			log.Error("Failed to close browser", "error", err)
 		}
 	}()
 
 	// Open device URL
-	log.Printf("Opening device URL: %s", deviceURL)
+	log.Info("Opening device URL", "url", deviceURL)
 	page, err := browser.Page(proto.TargetCreateTarget{URL: deviceURL})
 	if err != nil {
 		return fmt.Errorf("failed to open page %s: %v", deviceURL, err)
 	}
 
-	// Wait for page to load
-	log.Println("Waiting for page to load...")
-	if err := page.WaitLoad(); err != nil {
-		return fmt.Errorf("failed to wait for page load: %v", err)
-	}
+	// // Wait for page to load
+	// log.Debug("Waiting for page to load...")
+	// err = page.Timeout(timeout).WaitLoad()
+	// if err != nil {
+	// 	return fmt.Errorf("failed to wait for page load: %v", err)
+	// }
 
-	// Find username field using specific XPath
-	log.Println("Looking for username field...")
-	usernameField, err := page.Timeout(DefaultTimeout).ElementX(XPathUsername)
+	// Fill username and submit
+	log.Info("Username routine")
+	err = fillAndSubmitField(page, XPathUsername, config.Username, "username field", timeout)
 	if err != nil {
-		return fmt.Errorf("username field not found with XPath %s: %v", XPathUsername, err)
-	}
-	log.Println("Found username field")
-
-	// Fill username
-	log.Println("Filling username...")
-	if err := usernameField.Input(config.Username); err != nil {
-		return fmt.Errorf("failed to input username: %v", err)
+		return err
 	}
 
-	// Submit the form by pressing Enter key in the password field
-	log.Println("Submitting username form...")
-	if err := usernameField.Type(input.Enter); err != nil {
-		return fmt.Errorf("failed to submit username form: %v", err)
-	}
-
-	// Find password field using specific XPath
-	log.Println("Looking for password field...")
-	passwordField, err := page.Timeout(DefaultTimeout).ElementX(XPathPassword)
+	// Fill password and submit
+	log.Info("Password routine")
+	err = fillAndSubmitField(page, XPathPassword, config.Password, "password field", timeout)
 	if err != nil {
-		return fmt.Errorf("password field not found with XPath %s: %v", XPathPassword, err)
-	}
-	log.Println("Found password field")
-
-	// Fill password
-	log.Println("Filling password...")
-	if err := passwordField.Input(config.Password); err != nil {
-		return fmt.Errorf("failed to input password: %v", err)
+		return err
 	}
 
-	// Submit the form by pressing Enter key in the password field
-	log.Println("Submitting login form...")
-	if err := passwordField.Type(input.Enter); err != nil {
-		return fmt.Errorf("failed to submit login form: %v", err)
-	}
-
-	// Find TOTP field using specific XPath
-	log.Println("Looking for TOTP field...")
-	totpField, err := page.Timeout(DefaultTimeout).ElementX(XPathTOTP)
+	// Get TOTP code and fill TOTP field
+	log.Info("TOTP routine")
+	totpCode, err := getTOTPCode(config)
 	if err != nil {
-		return fmt.Errorf("TOTP field not found with XPath %s: %v", XPathTOTP, err)
-	}
-	log.Println("Found TOTP field")
-
-	// Generate or get TOTP code
-	var totpCode string
-	if config.InteractiveTOTP {
-		totpCode, err = promptForInput("Enter TOTP code: ", false)
-		if err != nil {
-			return fmt.Errorf("failed to get TOTP code: %v", err)
-		}
-	} else {
-		log.Println("Generating TOTP code from secret...")
-		totpCode, err = totp.GenerateCode(config.TOTPSecret, time.Now())
-		if err != nil {
-			return fmt.Errorf("failed to generate TOTP code: %v", err)
-		}
+		return fmt.Errorf("failed to get TOTP code: %v", err)
 	}
 
-	log.Println("Filling TOTP code...")
-	if err := totpField.Input(totpCode); err != nil {
-		return fmt.Errorf("failed to input TOTP code: %v", err)
+	err = fillAndSubmitField(page, XPathTOTP, totpCode, "TOTP field", timeout)
+	if err != nil {
+		return err
 	}
 
-	// Submit TOTP form
-	log.Println("Submitting TOTP form...")
-	if err := totpField.Type(input.Enter); err != nil {
-		return fmt.Errorf("failed to submit TOTP form: %v", err)
+	log.Info("Buttons routine")
+	// Click first Allow button (CLI verification)
+	err = clickButton(page, XPathAllow1, "first Allow button", timeout)
+	if err != nil {
+		return err
 	}
 
-	// Look for first Allow button (CLI verification)
-	log.Println("Looking for first Allow button...")
-	allowButton1, err := page.Timeout(DefaultTimeout).ElementX(XPathAllow1)
-	if err == nil {
-		log.Println("Found first Allow button, clicking it...")
-		if err := allowButton1.Click(proto.InputMouseButtonLeft, 1); err != nil {
-			return fmt.Errorf("failed to click first Allow button: %v", err)
-		}
-		time.Sleep(3 * time.Second)
-	} else {
-		return fmt.Errorf("first Allow button not found with XPath %s: %v", XPathAllow1, err)
+	// Click second Allow button (final authorization)
+	err = clickButton(page, XPathAllow2, "second Allow button", timeout)
+	if err != nil {
+		return err
 	}
 
-	// Look for second Allow button (final authorization)
-	log.Println("Looking for second Allow button...")
-	allowButton2, err := page.Timeout(DefaultTimeout).ElementX(XPathAllow2)
-	if err == nil {
-		log.Println("Found second Allow button, clicking it...")
-		if err := allowButton2.Click(proto.InputMouseButtonLeft, 1); err != nil {
-			return fmt.Errorf("failed to click second Allow button: %v", err)
-		}
-		time.Sleep(3 * time.Second)
-	} else {
-		return fmt.Errorf("second Allow button not found with XPath %s: %v", XPathAllow2, err)
-	}
-
+	log.Info("Success message routine")
 	// Check for success message
-	log.Println("Checking for success message...")
-	successElement, err := page.Timeout(DefaultTimeout).ElementX(XPathSuccess)
-	if err == nil {
-		successText, err := successElement.Text()
-		if err != nil {
-			return fmt.Errorf("failed to get success message text: %v", err)
-		}
-		log.Printf("Success page found with text: %s", successText)
-	} else {
-		return fmt.Errorf("success message not found with XPath %s: %v", XPathSuccess, err)
+	err = checkSuccessMessage(page, timeout)
+	if err != nil {
+		return err
 	}
 
-	log.Println("Browser automation completed!")
+	log.Info("Browser automation completed!")
 	return nil
 }

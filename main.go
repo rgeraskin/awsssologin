@@ -3,11 +3,16 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"os"
 	"regexp"
 
+	"github.com/charmbracelet/log"
+
 	"github.com/spf13/cobra"
+)
+
+const (
+	DeviceURLRegex = `https://pashapay\.awsapps\.com/start/#/device\?user_code=[A-Z0-9-]+`
 )
 
 func main() {
@@ -26,8 +31,14 @@ Credentials can be provided via:
 1. Command line flags (highest priority)
 2. Environment variables (AWSSSOLOGIN_USERNAME, AWSSSOLOGIN_PASSWORD, AWSSSOLOGIN_TOTP_SECRET)
 3. Interactive prompts (lowest priority)`,
+		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSSO(&config)
+			logLevel, err := log.ParseLevel(config.LogLevel)
+			if err != nil {
+				return fmt.Errorf("invalid log level: %v", err)
+			}
+			log.SetLevel(logLevel)
+			return runSSO(&config, logLevel)
 		},
 	}
 
@@ -38,17 +49,21 @@ Credentials can be provided via:
 		StringVar(&config.DeviceURL, "device-url", "", "AWS SSO device URL (if provided, stdin will be ignored)")
 	rootCmd.Flags().
 		BoolVar(&config.ShowBrowser, "show-browser", false, "Show browser window (runs headless by default)")
+	rootCmd.Flags().
+		IntVar(&config.TimeoutSeconds, "timeout", 30, "Timeout in seconds for browser operations")
+	rootCmd.Flags().
+		StringVar(&config.LogLevel, "log-level", "info", "Log level (debug, info, warn, error), default is info")
 
 	if err := rootCmd.Execute(); err != nil {
 		log.Fatalf("Error: %v", err)
 	}
 }
 
-func runSSO(config *Config) error {
-	log.Println("Starting AWS SSO login automation...")
+func runSSO(config *Config, logLevel log.Level) error {
+	log.Info("Starting AWS SSO login automation...")
 
 	// Step 1: Get credentials
-	if err := getCredentials(config); err != nil {
+	if err := getCredentials(config, logLevel); err != nil {
 		return fmt.Errorf("failed to get credentials: %v", err)
 	}
 
@@ -58,30 +73,28 @@ func runSSO(config *Config) error {
 
 	if config.DeviceURL != "" {
 		deviceURL = config.DeviceURL
-		log.Printf("Using device URL from command line: %s", deviceURL)
+		log.Info("Using device URL from command line", "url", deviceURL)
 	} else {
 		deviceURL, err = readDeviceURLFromStdin()
 		if err != nil {
 			return fmt.Errorf("failed to read device URL from stdin: %v", err)
 		}
-		log.Printf("Device URL found from stdin: %s", deviceURL)
+		log.Info("Device URL found from stdin", "url", deviceURL)
 	}
 
 	// Step 3: Automate browser login
-	if err := automateBrowserLogin(deviceURL, config); err != nil {
+	if err := automateBrowserLogin(deviceURL, config, logLevel); err != nil {
 		return fmt.Errorf("browser automation failed: %v", err)
 	}
 
-	log.Println("AWS SSO login completed successfully!")
+	log.Info("AWS SSO login completed successfully!")
 	return nil
 }
 
 func readDeviceURLFromStdin() (string, error) {
-	log.Println("Reading AWS SSO output from stdin to find device URL...")
+	log.Info("Reading AWS SSO output from stdin to find device URL...")
 
-	urlRegex := regexp.MustCompile(
-		`https://pashapay\.awsapps\.com/start/#/device\?user_code=[A-Z0-9-]+`,
-	)
+	urlRegex := regexp.MustCompile(DeviceURLRegex)
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
@@ -89,10 +102,10 @@ func readDeviceURLFromStdin() (string, error) {
 		// log.Printf("AWS output: %s", line)
 
 		// Also forward the line to stdout so the user can see the original AWS output
-		// fmt.Println(line)
+		// log.Info(line)
 
 		if match := urlRegex.FindString(line); match != "" {
-			log.Printf("Device URL found: %s", match)
+			log.Info("Device URL regexp found", "url", match)
 			return match, nil
 		}
 	}

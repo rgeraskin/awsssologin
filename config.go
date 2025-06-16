@@ -7,6 +7,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/charmbracelet/log"
 	"golang.org/x/term"
 )
 
@@ -16,15 +17,19 @@ type Config struct {
 	TOTPSecret      string
 	DeviceURL       string
 	ShowBrowser     bool
+	TimeoutSeconds  int
 	InteractiveTOTP bool
+	LogLevel        string
 }
 
-func getCredentials(config *Config) error {
+func getCredentials(config *Config, logLevel log.Level) error {
+	log.SetLevel(logLevel)
+
 	// Username cascade: CLI -> ENV -> Interactive
 	if config.Username == "" {
 		if env := os.Getenv("AWSSSOLOGIN_USERNAME"); env != "" {
 			config.Username = env
-			fmt.Println("Using username from environment variable")
+			log.Info("Using username from environment variable")
 		} else {
 			username, err := promptForInput("Enter AWS SSO username: ", false)
 			if err != nil {
@@ -33,14 +38,14 @@ func getCredentials(config *Config) error {
 			config.Username = username
 		}
 	} else {
-		fmt.Println("Using username from command line")
+		log.Info("Using username from command line")
 	}
 
 	// Password cascade: CLI -> ENV -> Interactive
 	if config.Password == "" {
 		if env := os.Getenv("AWSSSOLOGIN_PASSWORD"); env != "" {
 			config.Password = env
-			fmt.Println("Using password from environment variable")
+			log.Info("Using password from environment variable")
 		} else {
 			password, err := promptForInput("Enter AWS SSO password: ", true)
 			if err != nil {
@@ -49,20 +54,20 @@ func getCredentials(config *Config) error {
 			config.Password = password
 		}
 	} else {
-		fmt.Println("Using password from command line")
+		log.Info("Using password from command line")
 	}
 
 	// TOTP Secret cascade: CLI -> ENV -> Interactive mode
 	if config.TOTPSecret == "" {
 		if env := os.Getenv("AWSSSOLOGIN_TOTP_SECRET"); env != "" {
 			config.TOTPSecret = env
-			fmt.Println("Using TOTP secret from environment variable")
+			log.Info("Using TOTP secret from environment variable")
 		} else {
-			fmt.Println("No TOTP secret provided - will prompt for TOTP code interactively")
+			log.Info("No TOTP secret provided - will prompt for TOTP code interactively")
 			config.InteractiveTOTP = true
 		}
 	} else {
-		fmt.Println("Using TOTP secret from command line")
+		log.Info("Using TOTP secret from command line")
 	}
 
 	return nil
@@ -71,19 +76,29 @@ func getCredentials(config *Config) error {
 func promptForInput(prompt string, secure bool) (string, error) {
 	fmt.Print(prompt)
 
-	if secure {
+	var input string
+	var err error
+
+	if secure { // password input
 		bytes, err := term.ReadPassword(int(syscall.Stdin))
 		fmt.Println() // Add newline after password input
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("failed to read secure input: %v", err)
 		}
-		return string(bytes), nil
+		input = string(bytes)
+	} else { // plain text input
+		reader := bufio.NewReader(os.Stdin)
+		input, err = reader.ReadString('\n')
+		if err != nil {
+			return "", fmt.Errorf("failed to read plain text input: %v", err)
+		}
+		input = strings.TrimSpace(input)
 	}
 
-	reader := bufio.NewReader(os.Stdin)
-	input, err := reader.ReadString('\n')
-	if err != nil {
-		return "", err
+	// if input is empty, return error
+	if input == "" {
+		return "", fmt.Errorf("input is empty")
 	}
-	return strings.TrimSpace(input), nil
+
+	return input, nil
 }
