@@ -15,12 +15,13 @@ import (
 )
 
 const (
-	XPathUsername = `//*[@id="awsui-input-0"]`
-	XPathPassword = `//*[@id="awsui-input-1"]`
-	XPathTOTP     = `//*[@id="awsui-input-2"]`
-	XPathAllow1   = `//*[@id="cli_verification_btn"]`
-	XPathAllow2   = `//*[@data-testid="allow-access-button"]`
-	XPathSuccess  = `//*[@data-analytics-alert="success"]`
+	BrowserCloseDelay = 300 * time.Second
+	XPathUsername     = `//*[@id="awsui-input-0"]`
+	XPathPassword     = `//*[@id="awsui-input-1"]`
+	XPathTOTP         = `//*[@id="awsui-input-2"]`
+	XPathAllow1       = `//*[@id="cli_verification_btn"]`
+	XPathAllow2       = `//*[@data-testid="allow-access-button"]`
+	XPathSuccess      = `//*[@data-analytics-alert="success"]`
 )
 
 // Helper function to find an element with consistent error handling
@@ -134,8 +135,12 @@ func automateBrowserLogin(deviceURL string, config *Config) error {
 	}
 	defer func() {
 		if config.ShowBrowser && err != nil {
-			log.Warn("Browser will be closed in 5 minutes because of error")
-			time.Sleep(5 * time.Minute)
+			log.Warn(
+				"Browser will be closed after delay because of error",
+				"delaySeconds",
+				BrowserCloseDelay,
+			)
+			time.Sleep(BrowserCloseDelay)
 		}
 		if closeErr := browser.Close(); closeErr != nil {
 			log.Error("Failed to close browser", "error", closeErr)

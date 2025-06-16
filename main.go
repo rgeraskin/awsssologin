@@ -13,6 +13,7 @@ import (
 
 const (
 	DeviceURLRegex = `https://[a-zA-Z0-9-]+\.awsapps\.com/start/#/device\?user_code=[A-Z0-9-]+`
+	DefaultTimeout = 30
 )
 
 var (
@@ -56,7 +57,9 @@ Credentials can be provided via:
 	rootCmd.Flags().
 		BoolVar(&config.ShowBrowser, "show-browser", false, "Show browser window (runs headless by default)")
 	rootCmd.Flags().
-		IntVar(&config.TimeoutSeconds, "timeout", 30, "Timeout in seconds for browser operations")
+		IntVar(&config.TimeoutSeconds, "timeout", DefaultTimeout,
+			fmt.Sprintf("Timeout in seconds for browser operations (default is %d seconds)", DefaultTimeout),
+		)
 	rootCmd.Flags().
 		StringVar(&config.LogLevel, "log-level", "info", "Log level (debug, info, warn, error), default is info")
 
