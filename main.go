@@ -51,17 +51,16 @@ Credentials can be provided via:
 
 	rootCmd.Flags().StringVarP(&config.Username, "username", "u", "", "AWS SSO username")
 	rootCmd.Flags().StringVarP(&config.Password, "password", "p", "", "AWS SSO password")
-	rootCmd.Flags().StringVar(&config.TOTPSecret, "totp-secret", "", "TOTP secret key for 2FA")
+	rootCmd.Flags().
+		StringVarP(&config.TOTPSecret, "totp-secret", "t", "", "TOTP secret key for 2FA (if not provided, you'll be prompted to enter TOTP interactively)")
 	rootCmd.Flags().
 		StringVar(&config.DeviceURL, "device-url", "", "AWS SSO device URL (if provided, stdin will be ignored)")
 	rootCmd.Flags().
 		BoolVar(&config.ShowBrowser, "show-browser", false, "Show browser window (runs headless by default)")
 	rootCmd.Flags().
-		IntVar(&config.TimeoutSeconds, "timeout", DefaultTimeout,
-			fmt.Sprintf("Timeout in seconds for browser operations (default is %d seconds)", DefaultTimeout),
-		)
+		IntVar(&config.TimeoutSeconds, "timeout", DefaultTimeout, "Timeout in seconds for browser operations")
 	rootCmd.Flags().
-		StringVar(&config.LogLevel, "log-level", "info", "Log level (debug, info, warn, error), default is info")
+		StringVar(&config.LogLevel, "log-level", "info", "Log level: debug, info, warn, error")
 
 	if err := rootCmd.Execute(); err != nil {
 		log.Fatalf("Error: %v", err)
