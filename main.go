@@ -15,6 +15,12 @@ const (
 	DeviceURLRegex = `https://[a-zA-Z0-9-]+\.awsapps\.com/start/#/device\?user_code=[A-Z0-9-]+`
 )
 
+var (
+	// Pre-compiled regexes for better performance
+	deviceURLPattern           = regexp.MustCompile(DeviceURLRegex)
+	deviceURLValidationPattern = regexp.MustCompile("^" + DeviceURLRegex + "$")
+)
+
 func main() {
 	var config Config
 
@@ -120,7 +126,6 @@ func continueReadingStdin(scanner *bufio.Scanner) error {
 func readDeviceURLFromStdin(config *Config, logLevel log.Level) (string, *bufio.Scanner, error) {
 	log.Info("Reading AWS SSO output from stdin to find device URL...")
 
-	urlRegex := regexp.MustCompile(DeviceURLRegex)
 	scanner := bufio.NewScanner(os.Stdin)
 
 	// Find device URL
@@ -130,7 +135,7 @@ func readDeviceURLFromStdin(config *Config, logLevel log.Level) (string, *bufio.
 		// log.Debug("AWS output: %s", line)
 		// fmt.Println(line) // Forward to user
 
-		if match := urlRegex.FindString(line); match != "" {
+		if match := deviceURLPattern.FindString(line); match != "" {
 			log.Info("Device URL found from stdin", "url", match)
 			deviceURL = match
 			break // Stop reading, AWS CLI is now waiting for our browser automation

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"syscall"
 
@@ -42,8 +41,7 @@ func (c *Config) ValidateConfig() error {
 
 // validateDeviceURL checks if the device URL matches the expected AWS SSO pattern
 func validateDeviceURL(url string) error {
-	deviceURLRegex := regexp.MustCompile("^" + DeviceURLRegex + "$")
-	if !deviceURLRegex.MatchString(url) {
+	if !deviceURLValidationPattern.MatchString(url) {
 		return fmt.Errorf("URL does not match expected AWS SSO device URL pattern")
 	}
 	return nil
