@@ -92,7 +92,7 @@ func runSSO(config *Config) error {
 		deviceURL = config.DeviceURL
 		log.Info("Using device URL from command line", "url", deviceURL)
 	} else {
-		deviceURL, scanner, err = readDeviceURLFromStdin(config)
+		deviceURL, scanner, err = readDeviceURLFromStdin()
 		if err != nil {
 			return fmt.Errorf("failed to process stdin: %v", err)
 		}
@@ -126,7 +126,7 @@ func continueReadingStdin(scanner *bufio.Scanner) error {
 	return scanner.Err()
 }
 
-func readDeviceURLFromStdin(config *Config) (string, *bufio.Scanner, error) {
+func readDeviceURLFromStdin() (string, *bufio.Scanner, error) {
 	log.Info("Reading AWS SSO output from stdin to find device URL...")
 
 	scanner := bufio.NewScanner(os.Stdin)
