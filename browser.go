@@ -157,22 +157,19 @@ func automateBrowserLogin(deviceURL string, config *Config, logLevel log.Level) 
 	// 	return fmt.Errorf("failed to wait for page load: %v", err)
 	// }
 
-	// Fill username and submit
-	log.Info("Username routine")
+	// Fill credentials
+	log.Info("Filling AWS SSO credentials...")
 	err = fillAndSubmitField(page, XPathUsername, config.Username, "username field", timeout)
 	if err != nil {
 		return err
 	}
 
-	// Fill password and submit
-	log.Info("Password routine")
 	err = fillAndSubmitField(page, XPathPassword, config.Password, "password field", timeout)
 	if err != nil {
 		return err
 	}
 
-	// Get TOTP code and fill TOTP field
-	log.Info("TOTP routine")
+	// Get TOTP code and submit
 	totpCode, err := getTOTPCode(config)
 	if err != nil {
 		return fmt.Errorf("failed to get TOTP code: %v", err)
@@ -183,21 +180,19 @@ func automateBrowserLogin(deviceURL string, config *Config, logLevel log.Level) 
 		return err
 	}
 
-	log.Info("Buttons routine")
-	// Click first Allow button (CLI verification)
+	// Authorize access
+	log.Info("Authorizing AWS CLI access...")
 	err = clickButton(page, XPathAllow1, "first Allow button", timeout)
 	if err != nil {
 		return err
 	}
 
-	// Click second Allow button (final authorization)
 	err = clickButton(page, XPathAllow2, "second Allow button", timeout)
 	if err != nil {
 		return err
 	}
 
-	log.Info("Success message routine")
-	// Check for success message
+	// Verify login success
 	err = checkSuccessMessage(page, timeout)
 	if err != nil {
 		return err
