@@ -29,7 +29,7 @@ func getCredentials(config *Config, logLevel log.Level) error {
 	if config.Username == "" {
 		if env := os.Getenv("AWSSSOLOGIN_USERNAME"); env != "" {
 			config.Username = env
-			log.Info("Using username from environment variable")
+			log.Info("Using username from environment variable", "username", config.Username)
 		} else {
 			username, err := promptForInput("Enter AWS SSO username: ", false)
 			if err != nil {
@@ -38,7 +38,7 @@ func getCredentials(config *Config, logLevel log.Level) error {
 			config.Username = username
 		}
 	} else {
-		log.Info("Using username from command line")
+		log.Info("Using username from command line", "username", config.Username)
 	}
 
 	// Password cascade: CLI -> ENV -> Interactive

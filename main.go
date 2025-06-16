@@ -62,24 +62,26 @@ Credentials can be provided via:
 func runSSO(config *Config, logLevel log.Level) error {
 	log.Info("Starting AWS SSO login automation...")
 
+	var (
+		deviceURL string
+		scanner   *bufio.Scanner
+		err       error
+	)
+
 	// Step 1: Get credentials
 	if err := getCredentials(config, logLevel); err != nil {
 		return fmt.Errorf("failed to get credentials: %v", err)
 	}
 
 	// Step 2: Get device URL either from command line or stdin
-	var deviceURL string
-	var err error
-
 	if config.DeviceURL != "" {
 		deviceURL = config.DeviceURL
 		log.Info("Using device URL from command line", "url", deviceURL)
 	} else {
-		deviceURL, err = readDeviceURLFromStdin()
+		deviceURL, scanner, err = readDeviceURLFromStdin(config, logLevel)
 		if err != nil {
-			return fmt.Errorf("failed to read device URL from stdin: %v", err)
+			return fmt.Errorf("failed to process stdin: %v", err)
 		}
-		log.Info("Device URL found from stdin", "url", deviceURL)
 	}
 
 	// Step 3: Automate browser login
@@ -87,32 +89,56 @@ func runSSO(config *Config, logLevel log.Level) error {
 		return fmt.Errorf("browser automation failed: %v", err)
 	}
 
+	// Step 4: Continue reading remaining AWS CLI output to prevent broken pipe
+	if config.DeviceURL == "" {
+		log.Debug("Browser automation complete, reading remaining AWS CLI output...")
+		err := continueReadingStdin(scanner)
+		if err != nil {
+			return fmt.Errorf("failed to read remaining AWS CLI output: %v", err)
+		}
+	}
+
 	log.Info("AWS SSO login completed successfully!")
 	return nil
 }
 
-func readDeviceURLFromStdin() (string, error) {
+func continueReadingStdin(scanner *bufio.Scanner) error {
+	for scanner.Scan() {
+		line := scanner.Text()
+		// log.Debug("AWS output: %s", line)
+		fmt.Println(line) // Forward to user
+	}
+
+	return scanner.Err()
+}
+
+func readDeviceURLFromStdin(config *Config, logLevel log.Level) (string, *bufio.Scanner, error) {
 	log.Info("Reading AWS SSO output from stdin to find device URL...")
 
 	urlRegex := regexp.MustCompile(DeviceURLRegex)
-
 	scanner := bufio.NewScanner(os.Stdin)
+
+	// Find device URL
+	var deviceURL string
 	for scanner.Scan() {
 		line := scanner.Text()
-		// log.Printf("AWS output: %s", line)
-
-		// Also forward the line to stdout so the user can see the original AWS output
-		// log.Info(line)
+		// log.Debug("AWS output: %s", line)
+		// fmt.Println(line) // Forward to user
 
 		if match := urlRegex.FindString(line); match != "" {
-			log.Info("Device URL regexp found", "url", match)
-			return match, nil
+			log.Info("Device URL found from stdin", "url", match)
+			deviceURL = match
+			break // Stop reading, AWS CLI is now waiting for our browser automation
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("error reading from stdin: %v", err)
+		return "", nil, fmt.Errorf("error reading from stdin: %v", err)
 	}
 
-	return "", fmt.Errorf("device URL not found in AWS SSO output")
+	if deviceURL == "" {
+		return "", nil, fmt.Errorf("device URL not found in AWS SSO output")
+	}
+
+	return deviceURL, scanner, nil
 }
