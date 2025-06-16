@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	DeviceURLRegex = `https://pashapay\.awsapps\.com/start/#/device\?user_code=[A-Z0-9-]+`
+	DeviceURLRegex = `https://[a-zA-Z0-9-]+\.awsapps\.com/start/#/device\?user_code=[A-Z0-9-]+`
 )
 
 func main() {
@@ -61,6 +61,11 @@ Credentials can be provided via:
 
 func runSSO(config *Config, logLevel log.Level) error {
 	log.Info("Starting AWS SSO login automation...")
+
+	// Step 0: Validate configuration and set defaults
+	if err := config.ValidateConfig(); err != nil {
+		return fmt.Errorf("configuration validation failed: %v", err)
+	}
 
 	var (
 		deviceURL string

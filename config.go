@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"syscall"
 
@@ -20,6 +21,32 @@ type Config struct {
 	TimeoutSeconds  int
 	InteractiveTOTP bool
 	LogLevel        string
+}
+
+// ValidateConfig validates configuration values and sets reasonable defaults
+func (c *Config) ValidateConfig() error {
+	// Set default timeout if not provided or invalid
+	if c.TimeoutSeconds <= 0 {
+		return fmt.Errorf("timeout must be at least 1 second, got: %d", c.TimeoutSeconds)
+	}
+
+	// Validate device URL format if provided
+	if c.DeviceURL != "" {
+		if err := validateDeviceURL(c.DeviceURL); err != nil {
+			return fmt.Errorf("invalid device URL: %v", err)
+		}
+	}
+
+	return nil
+}
+
+// validateDeviceURL checks if the device URL matches the expected AWS SSO pattern
+func validateDeviceURL(url string) error {
+	deviceURLRegex := regexp.MustCompile("^" + DeviceURLRegex + "$")
+	if !deviceURLRegex.MatchString(url) {
+		return fmt.Errorf("URL does not match expected AWS SSO device URL pattern")
+	}
+	return nil
 }
 
 func getCredentials(config *Config, logLevel log.Level) error {
