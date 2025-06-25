@@ -30,8 +30,16 @@ Alternatively, you can provide the device URL directly with `--device-url` to by
 
 ## Installation
 
-```bash
-go build -o awsssologin
+### Homebrew
+
+```sh
+brew install rgeraskin/homebrew/awsssologin
+```
+
+### Go
+
+```sh
+go install github.com/rgeraskin/awsssologin@latest
 ```
 
 ## Usage
