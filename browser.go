@@ -82,14 +82,24 @@ func clickButton(page *rod.Page, xpath string, description string, timeout time.
 	return nil
 }
 
-// Helper function to get TOTP code based on configuration
-func getTOTPCode(config *Config) (string, error) {
-	if config.InteractiveTOTP {
-		return promptForInput("Enter TOTP code: ", false)
+// Helper function to get 2FA code
+func get2FACode(config *Config) (string, error) {
+	if config.TwoFA != "" {
+		log.Debug("Using 2FA code from command line")
+		return config.TwoFA, nil
 	}
 
-	log.Debug("Generating TOTP code from secret...")
-	return totp.GenerateCode(config.TOTPSecret, time.Now())
+	if config.TOTPSecret != "" {
+		log.Debug("Generating 2FA code from TOTP secret...")
+		return totp.GenerateCode(config.TOTPSecret, time.Now())
+	}
+
+	twoFA, err := promptForInput("Enter 2FA code: ", false)
+	if err != nil {
+		return "", fmt.Errorf("failed to get 2FA code interactively: %v", err)
+	}
+	log.Debugf("Using 2FA code from interactive prompt: %s", twoFA)
+	return twoFA, nil
 }
 
 // Helper function to check for success message
@@ -111,7 +121,6 @@ func checkSuccessMessage(page *rod.Page, timeout time.Duration) error {
 }
 
 func automateBrowserLogin(deviceURL string, config *Config) error {
-
 	log.Info("Starting browser automation...")
 	timeout := time.Duration(config.TimeoutSeconds) * time.Second
 
@@ -173,13 +182,13 @@ func automateBrowserLogin(deviceURL string, config *Config) error {
 		return err
 	}
 
-	// Get TOTP code and submit
-	totpCode, err := getTOTPCode(config)
+	// Get 2FA code and submit
+	twoFA, err := get2FACode(config)
 	if err != nil {
-		return fmt.Errorf("failed to get TOTP code: %v", err)
+		return fmt.Errorf("failed to get 2FA code: %v", err)
 	}
 
-	err = fillAndSubmitField(page, XPathTOTP, totpCode, "TOTP field", timeout)
+	err = fillAndSubmitField(page, XPathTOTP, twoFA, "2FA field", timeout)
 	if err != nil {
 		return err
 	}

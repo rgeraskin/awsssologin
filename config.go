@@ -12,14 +12,14 @@ import (
 )
 
 type Config struct {
-	Username        string
-	Password        string
-	TOTPSecret      string
-	DeviceURL       string
-	ShowBrowser     bool
-	TimeoutSeconds  int
-	InteractiveTOTP bool
-	LogLevel        string
+	Username       string
+	Password       string
+	TwoFA          string
+	TOTPSecret     string
+	DeviceURL      string
+	ShowBrowser    bool
+	TimeoutSeconds int
+	LogLevel       string
 }
 
 // ValidateConfig validates configuration values and sets reasonable defaults
@@ -39,6 +39,11 @@ func (c *Config) ValidateConfig() error {
 	return nil
 }
 
+// hasIncompleteCredentials returns true if any required credentials are missing
+func (c *Config) hasIncompleteCredentials() bool {
+	return c.Username == "" || c.Password == "" || (c.TwoFA == "" && c.TOTPSecret == "")
+}
+
 // validateDeviceURL checks if the device URL matches the expected AWS SSO pattern
 func validateDeviceURL(url string) error {
 	if !deviceURLValidationPattern.MatchString(url) {
@@ -48,50 +53,72 @@ func validateDeviceURL(url string) error {
 }
 
 func getCredentials(config *Config) error {
-
-	// Username cascade: CLI -> ENV -> Interactive
+	// Username: CLI -> ENV
 	if config.Username == "" {
 		if env := os.Getenv("AWSSSOLOGIN_USERNAME"); env != "" {
 			config.Username = env
 			log.Info("Using username from environment variable", "username", config.Username)
-		} else {
-			username, err := promptForInput("Enter AWS SSO username: ", false)
-			if err != nil {
-				return err
-			}
-			config.Username = username
 		}
 	} else {
 		log.Info("Using username from command line", "username", config.Username)
 	}
 
-	// Password cascade: CLI -> ENV -> Interactive
+	// Password: CLI -> ENV
 	if config.Password == "" {
 		if env := os.Getenv("AWSSSOLOGIN_PASSWORD"); env != "" {
 			config.Password = env
 			log.Info("Using password from environment variable")
-		} else {
-			password, err := promptForInput("Enter AWS SSO password: ", true)
-			if err != nil {
-				return err
-			}
-			config.Password = password
 		}
 	} else {
 		log.Info("Using password from command line")
 	}
 
-	// TOTP Secret cascade: CLI -> ENV -> Interactive mode
+	// 2FA: CLI -> ENV
+	if config.TwoFA == "" {
+		if env := os.Getenv("AWSSSOLOGIN_2FA"); env != "" {
+			config.TwoFA = env
+			log.Info("Using 2FA code from environment variable")
+		}
+	} else {
+		log.Info("Using 2FA code from command line")
+	}
+
+	// TOTP Secret: CLI -> ENV
 	if config.TOTPSecret == "" {
 		if env := os.Getenv("AWSSSOLOGIN_TOTP_SECRET"); env != "" {
 			config.TOTPSecret = env
 			log.Info("Using TOTP secret from environment variable")
-		} else {
-			log.Info("No TOTP secret provided - will prompt for TOTP code interactively")
-			config.InteractiveTOTP = true
 		}
 	} else {
 		log.Info("Using TOTP secret from command line")
+	}
+
+	// Interactive prompt doesn't work with stdin
+	if config.DeviceURL == "" && config.hasIncompleteCredentials() {
+		return fmt.Errorf("interactive prompts work only with --device-url flag")
+	}
+
+	// Interactive prompts
+	if config.Username == "" {
+		username, err := promptForInput("Enter AWS SSO username: ", false)
+		if err != nil {
+			return err
+		}
+		config.Username = username
+	}
+
+	if config.Password == "" {
+		password, err := promptForInput("Enter AWS SSO password: ", true)
+		if err != nil {
+			return err
+		}
+		config.Password = password
+	}
+
+	// If no 2FA code or TOTP secret provided, prompt for 2FA code later
+	// because we are limited in time for 2FA code
+	if config.TwoFA == "" && config.TOTPSecret == "" {
+		log.Info("No 2FA code or TOTP secret provided, will prompt for 2FA code later")
 	}
 
 	return nil

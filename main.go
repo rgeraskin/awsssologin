@@ -36,8 +36,8 @@ Usage:
 
 Credentials can be provided via:
 1. Command line flags (highest priority)
-2. Environment variables (AWSSSOLOGIN_USERNAME, AWSSSOLOGIN_PASSWORD, AWSSSOLOGIN_TOTP_SECRET)
-3. Interactive prompts (lowest priority)`,
+2. Environment variables (AWSSSOLOGIN_USERNAME, AWSSSOLOGIN_PASSWORD, AWSSSOLOGIN_2FA, AWSSSOLOGIN_TOTP_SECRET)
+3. Interactive prompts (lowest priority). Works only with --device-url flag!`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			logLevel, err := log.ParseLevel(config.LogLevel)
@@ -51,6 +51,7 @@ Credentials can be provided via:
 
 	rootCmd.Flags().StringVarP(&config.Username, "username", "u", "", "AWS SSO username")
 	rootCmd.Flags().StringVarP(&config.Password, "password", "p", "", "AWS SSO password")
+	rootCmd.Flags().StringVarP(&config.TwoFA, "2fa", "", "", "AWS SSO 2FA code")
 	rootCmd.Flags().
 		StringVarP(&config.TOTPSecret, "totp-secret", "t", "", "TOTP secret key for 2FA (if not provided, you'll be prompted to enter TOTP interactively)")
 	rootCmd.Flags().
@@ -95,6 +96,8 @@ func runSSO(config *Config) error {
 		if err != nil {
 			return fmt.Errorf("failed to process stdin: %v", err)
 		}
+		// Continue reading remaining AWS CLI output to prevent broken pipe
+		defer continueReadingStdin(scanner)
 	}
 
 	// Step 3: Automate browser login
@@ -102,27 +105,21 @@ func runSSO(config *Config) error {
 		return fmt.Errorf("browser automation failed: %v", err)
 	}
 
-	// Step 4: Continue reading remaining AWS CLI output to prevent broken pipe
-	if config.DeviceURL == "" {
-		log.Debug("Browser automation complete, reading remaining AWS CLI output...")
-		err := continueReadingStdin(scanner)
-		if err != nil {
-			return fmt.Errorf("failed to read remaining AWS CLI output: %v", err)
-		}
-	}
-
 	log.Info("AWS SSO login completed successfully!")
 	return nil
 }
 
-func continueReadingStdin(scanner *bufio.Scanner) error {
+func continueReadingStdin(scanner *bufio.Scanner) {
+	log.Debug("Reading remaining AWS CLI output...")
 	for scanner.Scan() {
 		line := scanner.Text()
 		// log.Debug("AWS output: %s", line)
 		fmt.Println(line) // Forward to user
 	}
 
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		log.Errorf("failed to read remaining AWS CLI output: %v", err)
+	}
 }
 
 func readDeviceURLFromStdin() (string, *bufio.Scanner, error) {
