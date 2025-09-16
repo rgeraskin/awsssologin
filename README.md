@@ -2,7 +2,7 @@
 
 Automate AWS SSO login by reading output from `aws sso login --no-browser --use-device-code` and automatically filling in credentials using browser headless automation with go-rod.
 
-> Use password manager cli to get username, password, 2fa code or totp secret in secure way.
+> Use a password manager CLI to securely retrieve a username, password, two-factor authentication (2FA) code, or TOTP secret, such as with 1Password, Bitwarden, KeePass, [kctouch](https://github.com/rgeraskin/kctouch) or similar tools.
 
 Note that to make it work you need to have `Authenticator app` as a Multi-factor authentication (MFA) device in your AWS account settings. It won't work with passkeys.
 
@@ -61,13 +61,17 @@ aws sso login --sso-session <session-name> --region us-east-1 --no-browser --use
 
 Simply add this to your `.zshrc` or `.bashrc` file and login with `asl` command. Use password manager cli to get username, password and totp secret in secure way.
 
+Here I use [kctouch](https://github.com/rgeraskin/kctouch) as an example tool to get username, password and totp secret from MacOS keychain.
+
 ```bash
 function asl () {
+  kctouch noop --cache-n 3 # auth with touch id once for 3 next requests
+
   aws sso login --sso-session <YOUR SESSION NAME> --no-browser --use-device-code | \
     awsssologin \
-      -u $(<YOUR COMMAND TO GET USERNAME>) \
-      -p $(<YOUR COMMAND TO GET PASSWORD>) \
-      -t $(<YOUR COMMAND TO GET TOTP SECRET>) \
+      -u $(kctouch get -s /aws/username) \
+      -p $(kctouch get -s /aws/password) \
+      -t $(kctouch get -s /aws/totp-secret) \
       --timeout 60 \
       $@
 }
