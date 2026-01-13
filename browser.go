@@ -15,14 +15,57 @@ import (
 )
 
 const (
-	BrowserCloseDelay = 300 * time.Second
-	XPathUsername     = `//*[@id="awsui-input-0"]`
-	XPathPassword     = `//*[@id="awsui-input-1"]`
-	XPathTOTP         = `//*[@id="awsui-input-2"]`
-	XPathAllow1       = `//*[@id="cli_verification_btn"]`
-	XPathAllow2       = `//*[@data-testid="allow-access-button"]`
-	XPathSuccess      = `//*[@data-analytics-alert="success"]`
+	BrowserCloseDelay   = 300 * time.Second
+	XPathUsername       = `//*[@id="awsui-input-0"]`
+	XPathPassword       = `//*[@id="awsui-input-1"]`
+	XPathTOTP           = `//*[@id="awsui-input-2"]`
+	XPathAllow1         = `//*[@id="cli_verification_btn"]`
+	XPathAllow2         = `//*[@data-testid="allow-access-button"]`
+	XPathSuccess        = `//*[@data-analytics-alert="success"]`
+	XPathCookieAccept   = `//*[@data-id="awsccc-cb-btn-accept" or @data-id="awsccc-cb-btn-decline" or (self::button and normalize-space()="Accept")]`
+	CookieBannerTimeout = 2 * time.Second
 )
+
+// dismissCookieBanner dismisses the AWS cookie consent banner if present.
+// Uses a short timeout since the banner may not always appear.
+func dismissCookieBanner(page *rod.Page) {
+	log.Debug("Checking for cookie consent banner...")
+
+	// Try CSS selectors using rod's native Element method (more reliable than JS eval)
+	cssSelectors := []string{
+		`[data-id="awsccc-cb-btn-accept"]`,  // AWS cookie consent Accept button
+		`[data-id="awsccc-cb-btn-decline"]`, // AWS cookie consent Decline button
+	}
+
+	for _, selector := range cssSelectors {
+		log.Debug("Trying CSS selector", "selector", selector)
+		button, err := page.Timeout(CookieBannerTimeout).Element(selector)
+		if err != nil {
+			log.Debug("Selector not found", "selector", selector)
+			continue
+		}
+
+		log.Debug("Cookie banner button found", "selector", selector)
+
+		// Wait for it to be visible
+		if err := button.WaitVisible(); err != nil {
+			log.Debug("Button not visible", "error", err)
+			continue
+		}
+
+		// Click it
+		if err := button.Click(proto.InputMouseButtonLeft, 1); err != nil {
+			log.Debug("Failed to click cookie button", "error", err)
+			continue
+		}
+
+		log.Debug("Cookie banner dismissed")
+		time.Sleep(500 * time.Millisecond)
+		return
+	}
+
+	log.Debug("No cookie banner found, continuing...")
+}
 
 // Helper function to find an element with consistent error handling
 func findElement(
@@ -78,7 +121,6 @@ func clickButton(page *rod.Page, xpath string, description string, timeout time.
 		return fmt.Errorf("failed to click %s: %v", description, err)
 	}
 
-	// time.Sleep(3 * time.Second)
 	return nil
 }
 
@@ -163,13 +205,6 @@ func automateBrowserLogin(deviceURL string, config *Config) error {
 		return fmt.Errorf("failed to open page %s: %v", deviceURL, err)
 	}
 
-	// // Wait for page to load
-	// log.Debug("Waiting for page to load...")
-	// err = page.Timeout(timeout).WaitLoad()
-	// if err != nil {
-	// 	return fmt.Errorf("failed to wait for page load: %v", err)
-	// }
-
 	// Fill credentials
 	log.Info("Filling AWS SSO credentials...")
 	err = fillAndSubmitField(page, XPathUsername, config.Username, "username field", timeout)
@@ -195,6 +230,10 @@ func automateBrowserLogin(deviceURL string, config *Config) error {
 
 	// Authorize access
 	log.Info("Authorizing AWS CLI access...")
+
+	// Dismiss cookie banner if it appears on the authorization page
+	dismissCookieBanner(page)
+
 	err = clickButton(page, XPathAllow1, "first Allow button", timeout)
 	if err != nil {
 		return err
