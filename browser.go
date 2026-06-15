@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/charmbracelet/log"
 
@@ -24,6 +27,9 @@ const (
 	XPathSuccess        = `//*[@data-analytics-alert="success"]`
 	XPathCookieAccept   = `//*[@data-id="awsccc-cb-btn-accept" or @data-id="awsccc-cb-btn-decline" or (self::button and normalize-space()="Accept")]`
 	CookieBannerTimeout = 2 * time.Second
+	// DumpTimeout bounds each failure-dump capture so debugging a stuck page
+	// can never hang as long as the operation that failed.
+	DumpTimeout = 10 * time.Second
 )
 
 // dismissCookieBanner dismisses the AWS cookie consent banner if present.
@@ -164,7 +170,6 @@ func checkSuccessMessage(page *rod.Page, timeout time.Duration) error {
 
 func automateBrowserLogin(deviceURL string, config *Config) error {
 	log.Info("Starting browser automation...")
-	timeout := time.Duration(config.TimeoutSeconds) * time.Second
 
 	// Setup launcher
 	if config.ShowBrowser {
@@ -205,15 +210,30 @@ func automateBrowserLogin(deviceURL string, config *Config) error {
 		return fmt.Errorf("failed to open page %s: %v", deviceURL, err)
 	}
 
-	// Fill credentials
-	log.Info("Filling AWS SSO credentials...")
-	err = fillAndSubmitField(page, XPathUsername, config.Username, "username field", timeout)
-	if err != nil {
+	// Run the login steps. On any failure, dump the page state to disk so the
+	// run can be investigated later, then propagate the error.
+	if err = performLoginSteps(page, config); err != nil {
+		dumpFailureInfo(page, config, err)
 		return err
 	}
 
-	err = fillAndSubmitField(page, XPathPassword, config.Password, "password field", timeout)
-	if err != nil {
+	log.Info("Browser automation completed!")
+	return nil
+}
+
+// performLoginSteps drives the credential, authorization, and success-check
+// stages of the AWS SSO flow on an already-opened page. Every step is bounded
+// by the single --timeout budget.
+func performLoginSteps(page *rod.Page, config *Config) error {
+	timeout := time.Duration(config.TimeoutSeconds) * time.Second
+
+	// Fill credentials
+	log.Info("Filling AWS SSO credentials...")
+	if err := fillAndSubmitField(page, XPathUsername, config.Username, "username field", timeout); err != nil {
+		return err
+	}
+
+	if err := fillAndSubmitField(page, XPathPassword, config.Password, "password field", timeout); err != nil {
 		return err
 	}
 
@@ -223,8 +243,7 @@ func automateBrowserLogin(deviceURL string, config *Config) error {
 		return fmt.Errorf("failed to get 2FA code: %v", err)
 	}
 
-	err = fillAndSubmitField(page, XPathTOTP, twoFA, "2FA field", timeout)
-	if err != nil {
+	if err := fillAndSubmitField(page, XPathTOTP, twoFA, "2FA field", timeout); err != nil {
 		return err
 	}
 
@@ -234,22 +253,82 @@ func automateBrowserLogin(deviceURL string, config *Config) error {
 	// Dismiss cookie banner if it appears on the authorization page
 	dismissCookieBanner(page)
 
-	err = clickButton(page, XPathAllow1, "first Allow button", timeout)
-	if err != nil {
+	if err := clickButton(page, XPathAllow1, "first Allow button", timeout); err != nil {
 		return err
 	}
 
-	err = clickButton(page, XPathAllow2, "second Allow button", timeout)
-	if err != nil {
+	if err := clickButton(page, XPathAllow2, "second Allow button", timeout); err != nil {
 		return err
 	}
 
 	// Verify login success
-	err = checkSuccessMessage(page, timeout)
-	if err != nil {
+	if err := checkSuccessMessage(page, timeout); err != nil {
 		return err
 	}
 
-	log.Info("Browser automation completed!")
 	return nil
+}
+
+// dumpFailureInfo writes the page HTML, a screenshot, and a metadata summary to
+// the debug directory so failures can be investigated to improve reliability.
+// It is best-effort: each capture is bounded by DumpTimeout and individual
+// failures are logged but never abort the dump. Secrets are never written.
+func dumpFailureInfo(page *rod.Page, config *Config, automationErr error) {
+	dir := config.DebugDir
+	if dir == "" {
+		dir = filepath.Join(os.TempDir(), "awsssologin-failures")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Warn("Could not create debug dump directory", "dir", dir, "error", err)
+		return
+	}
+
+	base := filepath.Join(dir, "failure-"+time.Now().Format("20060102-150405"))
+
+	// Bound every page interaction so dumping a stuck page can't hang.
+	p := page.Timeout(DumpTimeout)
+
+	// Page info (URL + title) for the metadata summary.
+	url, title := "<unknown>", "<unknown>"
+	if info, err := p.Info(); err != nil {
+		log.Warn("Could not read page info for debug dump", "error", err)
+	} else {
+		url, title = info.URL, info.Title
+	}
+
+	// Metadata summary — note we deliberately omit password/2FA/TOTP secrets.
+	var meta strings.Builder
+	fmt.Fprintf(&meta, "timestamp:       %s\n", time.Now().Format(time.RFC3339))
+	fmt.Fprintf(&meta, "error:           %v\n", automationErr)
+	fmt.Fprintf(&meta, "page_url:        %s\n", url)
+	fmt.Fprintf(&meta, "page_title:      %s\n", title)
+	fmt.Fprintf(&meta, "username:        %s\n", config.Username)
+	fmt.Fprintf(&meta, "timeout_s:       %d\n", config.TimeoutSeconds)
+	fmt.Fprintf(&meta, "show_browser:    %t\n", config.ShowBrowser)
+	writeDumpFile(base+".txt", []byte(meta.String()))
+
+	// Full page HTML.
+	if html, err := p.HTML(); err != nil {
+		log.Warn("Could not capture page HTML for debug dump", "error", err)
+	} else {
+		writeDumpFile(base+".html", []byte(html))
+	}
+
+	// Screenshot (PNG).
+	if shot, err := p.Screenshot(true, nil); err != nil {
+		log.Warn("Could not capture screenshot for debug dump", "error", err)
+	} else {
+		writeDumpFile(base+".png", shot)
+	}
+
+	log.Warn("Failure debug info written", "dir", dir, "prefix", filepath.Base(base))
+}
+
+// writeDumpFile writes a single debug artifact, logging on failure.
+func writeDumpFile(path string, data []byte) {
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		log.Warn("Could not write debug dump file", "path", path, "error", err)
+		return
+	}
+	log.Info("Wrote debug dump file", "path", path)
 }

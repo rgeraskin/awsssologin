@@ -88,6 +88,7 @@ function asl () {
 | `--device-url`   |       | AWS SSO device URL (if provided, stdin will be ignored) |
 | `--show-browser` |       | Show browser window (runs headless by default)          |
 | `--timeout`      |       | Timeout in seconds for browser operations (default: 30) |
+| `--debug-dir`    |       | Directory for failure debug dumps (HTML, screenshot, info); defaults to the OS temp dir |
 | `--log-level`    |       | Log level: debug, info, warn, error (default: info)     |
 | `--help`         | `-h`  | Show help                                               |
 
@@ -136,7 +137,7 @@ Runs in headless mode by default for automated workflows, but can show the brows
 1. **AWS CLI not found**: Ensure AWS CLI is installed and in your PATH
 2. **Browser automation fails**: Try running with `--show-browser` to see what's happening
 3. **Timeout issues**: Increase timeout with `--timeout 60` (or higher)
-4. **Debug information**: Use `--log-level debug` for detailed operation logs
+4. **Debug information**: Use `--log-level debug` for detailed operation logs. On any browser-automation failure the tool also writes a debug dump (page HTML, a screenshot, and a metadata summary) to the OS temp dir — or to `--debug-dir` — and logs the path. Secrets are never written to the dump.
 5. **Form fields not found**: The tool tries specific selectors, but some SSO pages may use custom ones. Create an issue if you encounter this.
 6. **TOTP issues**: Verify your TOTP secret is correct and properly base32-encoded. Also, if you're using 2FA code, it can expire during the login process. Consider using TOTP secret instead.
 7. **No device URL found**: Ensure you're using `--no-browser` and `--use-device-code` flags with `aws sso login`

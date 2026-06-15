@@ -61,6 +61,8 @@ Credentials can be provided via:
 	rootCmd.Flags().
 		IntVar(&config.TimeoutSeconds, "timeout", DefaultTimeout, "Timeout in seconds for browser operations")
 	rootCmd.Flags().
+		StringVar(&config.DebugDir, "debug-dir", "", "Directory to write failure debug dumps (HTML, screenshot, info); defaults to the OS temp dir")
+	rootCmd.Flags().
 		StringVar(&config.LogLevel, "log-level", "info", "Log level: debug, info, warn, error")
 
 	if err := rootCmd.Execute(); err != nil {
@@ -96,13 +98,21 @@ func runSSO(config *Config) error {
 		if err != nil {
 			return fmt.Errorf("failed to process stdin: %v", err)
 		}
-		// Continue reading remaining AWS CLI output to prevent broken pipe
-		defer continueReadingStdin(scanner)
 	}
 
 	// Step 3: Automate browser login
 	if err := automateBrowserLogin(deviceURL, config); err != nil {
+		// Fail fast: do NOT drain stdin here. The upstream "aws sso login
+		// --use-device-code" keeps polling CreateToken until the device code
+		// expires (~10 min), so draining would block reporting this error for
+		// that whole time. Exiting now closes the pipe and lets aws stop too.
 		return fmt.Errorf("browser automation failed: %v", err)
+	}
+
+	// On success, drain the remaining AWS CLI output so it can finish writing
+	// the token without a broken pipe.
+	if scanner != nil {
+		continueReadingStdin(scanner)
 	}
 
 	log.Info("AWS SSO login completed successfully!")

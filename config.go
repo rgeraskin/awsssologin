@@ -19,6 +19,7 @@ type Config struct {
 	DeviceURL      string
 	ShowBrowser    bool
 	TimeoutSeconds int
+	DebugDir       string
 	LogLevel       string
 }
 
