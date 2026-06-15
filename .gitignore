@@ -1,3 +1,4 @@
 /awsssologin
 /.vscode/launch.json
 /dist
+/.playwright-mcp

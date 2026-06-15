@@ -26,8 +26,9 @@ func main() {
 	var config Config
 
 	rootCmd := &cobra.Command{
-		Use:   "awsssologin",
-		Short: "Automate AWS SSO login with browser automation",
+		Use:     "awsssologin",
+		Version: versionString(),
+		Short:   "Automate AWS SSO login with browser automation",
 		Long: `Automate AWS SSO login by reading output from 'aws sso login --no-browser'
 and automatically filling in credentials using browser automation.
 
@@ -48,6 +49,8 @@ Credentials can be provided via:
 			return runSSO(&config)
 		},
 	}
+
+	rootCmd.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 
 	rootCmd.Flags().StringVarP(&config.Username, "username", "u", "", "AWS SSO username")
 	rootCmd.Flags().StringVarP(&config.Password, "password", "p", "", "AWS SSO password")
