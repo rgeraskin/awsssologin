@@ -23,8 +23,8 @@ Note that to make it work you need to have `Authenticator app` as a Multi-factor
 
 1. You run `aws sso login --no-browser --use-device-code` and pipe the output to `awsssologin`
 2. The tool reads the AWS CLI output from stdin and extracts the device URL
-4. The tool opens the device URL in a headless browser and automates the login process
-5. Once login is complete, the AWS CLI command finishes successfully
+3. The tool opens the device URL in a headless browser and automates the login process
+4. Once login is complete, the AWS CLI command finishes successfully
 
 Alternatively, you can provide the device URL directly with `--device-url` to bypass the AWS CLI pipe entirely. Also, it's the only way to use interactive prompts.
 
@@ -90,6 +90,7 @@ function asl () {
 | `--timeout`      |       | Timeout in seconds for browser operations (default: 30) |
 | `--debug-dir`    |       | Directory for failure debug dumps (HTML, screenshot, info); defaults to the OS temp dir |
 | `--log-level`    |       | Log level: debug, info, warn, error (default: info)     |
+| `--version`      | `-v`  | Print version and exit                                  |
 | `--help`         | `-h`  | Show help                                               |
 
 ### Credential Priority
