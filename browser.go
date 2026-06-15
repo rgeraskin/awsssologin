@@ -18,59 +18,96 @@ import (
 )
 
 const (
-	BrowserCloseDelay   = 300 * time.Second
-	XPathUsername       = `//*[@id="awsui-input-0"]`
-	XPathPassword       = `//*[@id="awsui-input-1"]`
-	XPathTOTP           = `//*[@id="awsui-input-2"]`
-	XPathAllow1         = `//*[@id="cli_verification_btn"]`
-	XPathAllow2         = `//*[@data-testid="allow-access-button"]`
-	XPathSuccess        = `//*[@data-analytics-alert="success"]`
-	XPathCookieAccept   = `//*[@data-id="awsccc-cb-btn-accept" or @data-id="awsccc-cb-btn-decline" or (self::button and normalize-space()="Accept")]`
-	CookieBannerTimeout = 2 * time.Second
+	BrowserCloseDelay    = 300 * time.Second
+	XPathUsername        = `//*[@id="awsui-input-0"]`
+	XPathPassword        = `//*[@id="awsui-input-1"]`
+	XPathTOTP            = `//*[@id="awsui-input-2"]`
+	XPathAllow1          = `//*[@id="cli_verification_btn"]`
+	XPathAllow2          = `//*[@data-testid="allow-access-button"]`
+	XPathSuccess         = `//*[@data-analytics-alert="success"]`
+	CookieAcceptSelector = `[data-id="awsccc-cb-btn-accept"]`
+	// CookieBannerTimeout bounds waiting for the consent banner to appear,
+	// animate in, and disappear. The banner reliably shows on the authorization
+	// page but slides up over ~1s, so a too-short wait races it and leaves the
+	// banner covering the Allow button.
+	CookieBannerTimeout = 10 * time.Second
 	// DumpTimeout bounds each failure-dump capture so debugging a stuck page
 	// can never hang as long as the operation that failed.
 	DumpTimeout = 10 * time.Second
 )
 
-// dismissCookieBanner dismisses the AWS cookie consent banner if present.
-// Uses a short timeout since the banner may not always appear.
+// diagJS asks the page what element is at the center of each known Allow
+// button. This mirrors rod's Interactable check (which also uses
+// elementFromPoint) so the dump can name exactly what is producing
+// CoveredError when a click fails with "context deadline exceeded".
+const diagJS = `() => {
+  const describe = n => n ? {
+    tag: n.tagName,
+    id: n.id || null,
+    cls: typeof n.className === 'string' ? n.className : null,
+    testid: n.dataset ? n.dataset.testid || null : null,
+    dataId: n.dataset ? n.dataset.id || null : null,
+  } : null;
+  const out = [];
+  for (const sel of ['#cli_verification_btn', '[data-testid="allow-access-button"]']) {
+    const el = document.querySelector(sel);
+    if (!el) { out.push({sel, found: false}); continue; }
+    const cs = getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const top = document.elementFromPoint(cx, cy);
+    out.push({
+      sel,
+      found: true,
+      self: describe(el),
+      rect: {x: r.left, y: r.top, w: r.width, h: r.height},
+      style: {display: cs.display, visibility: cs.visibility, opacity: cs.opacity, pointerEvents: cs.pointerEvents, zIndex: cs.zIndex},
+      disabled: el.disabled,
+      ariaDisabled: el.getAttribute('aria-disabled'),
+      atPoint: describe(top),
+      covered: top !== el && !el.contains(top),
+    });
+  }
+  return JSON.stringify(out);
+}`
+
+// dismissCookieBanner waits for the AWS cookie consent banner, accepts it, and
+// waits for it to disappear so it can't cover the authorization buttons.
+//
+// It is best-effort: if the banner never appears it logs and returns. The wait
+// matters because the banner mounts and slides in a beat after the page loads;
+// clicking Allow before it is dismissed leaves the banner covering the button,
+// which previously caused the click to spin until the timeout (see debug dumps).
 func dismissCookieBanner(page *rod.Page) {
-	log.Debug("Checking for cookie consent banner...")
+	log.Debug("Waiting for cookie consent banner...")
 
-	// Try CSS selectors using rod's native Element method (more reliable than JS eval)
-	cssSelectors := []string{
-		`[data-id="awsccc-cb-btn-accept"]`,  // AWS cookie consent Accept button
-		`[data-id="awsccc-cb-btn-decline"]`, // AWS cookie consent Decline button
-	}
-
-	for _, selector := range cssSelectors {
-		log.Debug("Trying CSS selector", "selector", selector)
-		button, err := page.Timeout(CookieBannerTimeout).Element(selector)
-		if err != nil {
-			log.Debug("Selector not found", "selector", selector)
-			continue
-		}
-
-		log.Debug("Cookie banner button found", "selector", selector)
-
-		// Wait for it to be visible
-		if err := button.WaitVisible(); err != nil {
-			log.Debug("Button not visible", "error", err)
-			continue
-		}
-
-		// Click it
-		if err := button.Click(proto.InputMouseButtonLeft, 1); err != nil {
-			log.Debug("Failed to click cookie button", "error", err)
-			continue
-		}
-
-		log.Debug("Cookie banner dismissed")
-		time.Sleep(500 * time.Millisecond)
+	// rod's Element retries until the deadline, so this also waits for the
+	// banner to mount instead of racing it.
+	btn, err := page.Timeout(CookieBannerTimeout).Element(CookieAcceptSelector)
+	if err != nil {
+		log.Debug("No cookie banner appeared, continuing...", "error", err)
 		return
 	}
 
-	log.Debug("No cookie banner found, continuing...")
+	// Wait for the banner to finish animating in so the click lands on it.
+	if _, err := btn.Timeout(CookieBannerTimeout).WaitInteractable(); err != nil {
+		log.Debug("Cookie banner button never became interactable", "error", err)
+		return
+	}
+
+	if err := btn.Click(proto.InputMouseButtonLeft, 1); err != nil {
+		log.Debug("Failed to click cookie accept button", "error", err)
+		return
+	}
+
+	// Wait for the banner (and thus this button) to disappear so it can't cover
+	// the Allow button. WaitInvisible also succeeds if the node is removed.
+	if err := btn.Timeout(CookieBannerTimeout).WaitInvisible(); err != nil {
+		log.Debug("Cookie banner did not disappear after accept", "error", err)
+		return
+	}
+
+	log.Debug("Cookie banner dismissed")
 }
 
 // Helper function to find an element with consistent error handling
@@ -305,6 +342,16 @@ func dumpFailureInfo(page *rod.Page, config *Config, automationErr error) {
 	fmt.Fprintf(&meta, "username:        %s\n", config.Username)
 	fmt.Fprintf(&meta, "timeout_s:       %d\n", config.TimeoutSeconds)
 	fmt.Fprintf(&meta, "show_browser:    %t\n", config.ShowBrowser)
+
+	// Interactability diagnostic — mirrors rod's Interactable check by calling
+	// elementFromPoint at each Allow button's center, so the dump answers
+	// "what is rod hitting CoveredError against?" instead of leaving us to guess.
+	if diag, err := p.Eval(diagJS); err != nil {
+		log.Warn("Could not capture interactability diagnostics", "error", err)
+		fmt.Fprintf(&meta, "diagnostics:     <error: %v>\n", err)
+	} else {
+		fmt.Fprintf(&meta, "diagnostics:     %s\n", diag.Value.Str())
+	}
 	writeDumpFile(base+".txt", []byte(meta.String()))
 
 	// Full page HTML.
