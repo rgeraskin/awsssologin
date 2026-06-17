@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"syscall"
@@ -17,6 +18,7 @@ type Config struct {
 	TwoFA          string
 	TOTPSecret     string
 	DeviceURL      string
+	DexURL         string
 	ShowBrowser    bool
 	TimeoutSeconds int
 	DebugDir       string
@@ -30,14 +32,39 @@ func (c *Config) ValidateConfig() error {
 		return fmt.Errorf("timeout must be at least 1 second, got: %d", c.TimeoutSeconds)
 	}
 
-	// Validate device URL format if provided
-	if c.DeviceURL != "" {
+	// The two flows are driven by different entry URLs and cannot be combined.
+	if c.DeviceURL != "" && c.DexURL != "" {
+		return fmt.Errorf("--device-url and --dex-url are mutually exclusive")
+	}
+
+	// A URL source is mandatory and always explicit: a literal URL, or "-" to
+	// read it from stdin. There is no implicit default.
+	if c.DeviceURL == "" && c.DexURL == "" {
+		return fmt.Errorf("no URL source: pass --device-url, --dex-url, or either with '-' to read from stdin")
+	}
+
+	// Validate device URL format when a literal URL is given ("-" means stdin).
+	if c.DeviceURL != "" && c.DeviceURL != StdinURLSource {
 		if err := validateDeviceURL(c.DeviceURL); err != nil {
 			return fmt.Errorf("invalid device URL: %v", err)
 		}
 	}
 
+	// Validate Dex URL format when a literal URL is given ("-" means stdin).
+	if c.DexURL != "" && c.DexURL != StdinURLSource {
+		if err := validateDexURL(c.DexURL); err != nil {
+			return fmt.Errorf("invalid dex URL: %v", err)
+		}
+	}
+
 	return nil
+}
+
+// usesStdin reports whether the login URL will be read from stdin, which is the
+// case when either URL flag is set to "-". Interactive credential prompts are
+// impossible in that case because the pipe owns stdin.
+func (c *Config) usesStdin() bool {
+	return c.DeviceURL == StdinURLSource || c.DexURL == StdinURLSource
 }
 
 // hasIncompleteCredentials returns true if any required credentials are missing
@@ -46,9 +73,27 @@ func (c *Config) hasIncompleteCredentials() bool {
 }
 
 // validateDeviceURL checks if the device URL matches the expected AWS SSO pattern
-func validateDeviceURL(url string) error {
-	if !deviceURLValidationPattern.MatchString(url) {
+func validateDeviceURL(rawURL string) error {
+	if !deviceURLValidationPattern.MatchString(rawURL) {
 		return fmt.Errorf("URL does not match expected AWS SSO device URL pattern")
+	}
+	return nil
+}
+
+// validateDexURL checks that the Dex auth URL is a parseable http(s) URL that
+// carries a redirect_uri. The redirect_uri is where the browser lands once
+// login succeeds, so the dex flow uses it as its success signal — without it
+// there is nothing to wait for.
+func validateDexURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("URL is not parseable: %v", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("URL scheme must be http or https, got %q", u.Scheme)
+	}
+	if u.Query().Get("redirect_uri") == "" {
+		return fmt.Errorf("URL is missing the redirect_uri query parameter")
 	}
 	return nil
 }
@@ -94,9 +139,10 @@ func getCredentials(config *Config) error {
 		log.Info("Using TOTP secret from command line")
 	}
 
-	// Interactive prompt doesn't work with stdin
-	if config.DeviceURL == "" && config.hasIncompleteCredentials() {
-		return fmt.Errorf("interactive prompts work only with --device-url flag")
+	// Interactive prompt doesn't work when the URL comes from stdin, because the
+	// pipe owns stdin. It is fine when a literal URL is passed to a flag.
+	if config.usesStdin() && config.hasIncompleteCredentials() {
+		return fmt.Errorf("interactive prompts don't work when reading the URL from stdin ('-'); provide credentials via flags or environment variables")
 	}
 
 	// Interactive prompts

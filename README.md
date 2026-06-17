@@ -1,10 +1,12 @@
 # AWS SSO Login Headless Automation
 
-Automate AWS SSO login by reading output from `aws sso login --no-browser --use-device-code` and automatically filling in credentials using browser headless automation with go-rod.
+Automate AWS SSO login by reading output from `aws sso login ...` / `argocd login --sso ...` and automatically filling in credentials using browser headless automation.
 
 > Use a password manager CLI to securely retrieve a username, password, two-factor authentication (2FA) code, or TOTP secret, such as with 1Password, Bitwarden, KeePass, [kctouch](https://github.com/rgeraskin/kctouch) or similar tools.
 
 Note that to make it work you need to have `Authenticator app` as a Multi-factor authentication (MFA) device in your AWS account settings. It won't work with passkeys.
+
+**Dex SSO is also supported.** For CLIs that log in through Dex backed by AWS IAM Identity Center, see [ArgoCD / Dex SSO login](#argocd--dex-sso-login-auth-code-flow) for details.
 
 ## Features
 
@@ -18,6 +20,7 @@ Note that to make it work you need to have `Authenticator app` as a Multi-factor
 - ✅ Forwards AWS CLI output to maintain original functionality
 - ✅ Configurable timeouts and logging levels
 - ✅ Direct device URL input (bypassing AWS CLI pipe)
+- ✅ Dex OIDC auth-code flow (e.g. ArgoCD) via `--dex-url`
 
 ## How It Works
 
@@ -26,7 +29,7 @@ Note that to make it work you need to have `Authenticator app` as a Multi-factor
 3. The tool opens the device URL in a headless browser and automates the login process
 4. Once login is complete, the AWS CLI command finishes successfully
 
-Alternatively, you can provide the device URL directly with `--device-url` to bypass the AWS CLI pipe entirely. Also, it's the only way to use interactive prompts.
+Alternatively, you can provide the device URL directly with `--device-url` to bypass the AWS CLI pipe entirely. Passing a literal URL (via `--device-url` or `--dex-url`) is also what enables interactive credential prompts — they're unavailable when the URL is read from stdin with `-`.
 
 ## Installation
 
@@ -53,8 +56,23 @@ aws sso login --no-browser --use-device-code
 ```
 
 ### With Additional AWS CLI Arguments and Credentials Flags (fully automated)
+
+Pass `--device-url -` to read the device URL from the piped output:
+
 ```bash
-aws sso login --sso-session <session-name> --region us-east-1 --no-browser --use-device-code | ./awsssologin -u myusername -p mypassword --2fa 123456
+aws sso login --sso-session <session-name> --region us-east-1 --no-browser --use-device-code | ./awsssologin --device-url - -u myusername -p mypassword --2fa 123456
+```
+
+### ArgoCD / Dex SSO login (auth-code flow)
+
+For CLIs that log in through Dex backed by AWS IAM Identity Center, pass the printed
+Dex auth URL via `--dex-url` (or `--dex-url -` to read it from the pipe). The browser
+lands on the same AWS sign-in form; on success it is redirected to the CLI's local
+callback, which unblocks the CLI:
+
+```bash
+argocd login --grpc-web <server> --sso --sso-launch-browser=false 2>&1 | \
+  ./awsssologin --dex-url - -u myusername -p mypassword -t <totp-secret>
 ```
 
 ### Useful shell alias
@@ -69,6 +87,7 @@ function asl () {
 
   aws sso login --sso-session <YOUR SESSION NAME> --no-browser --use-device-code | \
     awsssologin \
+      --device-url - \
       -u $(kctouch get -s /aws/username) \
       -p $(kctouch get -s /aws/password) \
       -t $(kctouch get -s /aws/totp-secret) \
@@ -79,19 +98,20 @@ function asl () {
 
 ### Command Line Options
 
-| Flag             | Short | Description                                             |
-|------------------|-------|---------------------------------------------------------|
-| `--username`     | `-u`  | AWS SSO username                                        |
-| `--password`     | `-p`  | AWS SSO password                                        |
-| `--2fa`          |       | AWS SSO 2FA code                                        |
-| `--totp-secret`  | `-t`  | TOTP secret key for automatic 2FA generation            |
-| `--device-url`   |       | AWS SSO device URL (if provided, stdin will be ignored) |
-| `--show-browser` |       | Show browser window (runs headless by default)          |
-| `--timeout`      |       | Timeout in seconds for browser operations (default: 30) |
-| `--debug-dir`    |       | Directory for failure debug dumps (HTML, screenshot, info); defaults to the OS temp dir |
-| `--log-level`    |       | Log level: debug, info, warn, error (default: info)     |
-| `--version`      | `-v`  | Print version and exit                                  |
-| `--help`         | `-h`  | Show help                                               |
+| Flag             | Short | Description                                                                                              |
+|------------------|-------|----------------------------------------------------------------------------------------------------------|
+| `--username`     | `-u`  | AWS SSO username                                                                                         |
+| `--password`     | `-p`  | AWS SSO password                                                                                         |
+| `--2fa`          |       | AWS SSO 2FA code                                                                                         |
+| `--totp-secret`  | `-t`  | TOTP secret key for automatic 2FA generation                                                             |
+| `--device-url`   |       | AWS SSO device URL, or `-` to read it from stdin                                                         |
+| `--dex-url`      |       | Dex OIDC auth URL (auth-code flow), or `-` to read it from stdin; mutually exclusive with `--device-url` |
+| `--show-browser` |       | Show browser window (runs headless by default)                                                           |
+| `--timeout`      |       | Timeout in seconds for browser operations (default: 30)                                                  |
+| `--debug-dir`    |       | Directory for failure debug dumps (HTML, screenshot, info); defaults to the OS temp dir                  |
+| `--log-level`    |       | Log level: debug, info, warn, error (default: info)                                                      |
+| `--version`      | `-v`  | Print version and exit                                                                                   |
+| `--help`         | `-h`  | Show help                                                                                                |
 
 ### Credential Priority
 
@@ -103,7 +123,7 @@ Credentials are resolved in the following order (highest to lowest priority):
    - `AWSSSOLOGIN_PASSWORD`
    - `AWSSSOLOGIN_2FA`
    - `AWSSSOLOGIN_TOTP_SECRET`
-3. **Interactive prompts** (works only with `--device-url` flag, no stdin is allowed)
+3. **Interactive prompts** (only when a literal URL is passed via `--device-url` or `--dex-url`; not available when reading the URL from stdin with `-`)
 
 ### TOTP Handling
 
@@ -130,6 +150,10 @@ The tool uses specific XPath selectors optimized for AWS SSO pages:
 - First Allow button: `//*[@id="cli_verification_btn"]`
 - Second Allow button: `//*[@data-testid="allow-access-button"]`
 - Success message: `//*[@data-analytics-alert="success"]`
+
+The Dex auth-code flow (`--dex-url`) shares the username/password fields but differs after that:
+- It submits the MFA code when the verification page appears (field `//input[@placeholder="Enter code"]`)
+- There are no Allow buttons; success is the browser being redirected to the auth URL's `redirect_uri` (the CLI's local callback), not an on-page element
 
 Runs in headless mode by default for automated workflows, but can show the browser with `--show-browser` for debugging.
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,10 +19,17 @@ import (
 )
 
 const (
-	BrowserCloseDelay    = 300 * time.Second
-	XPathUsername        = `//*[@id="awsui-input-0"]`
-	XPathPassword        = `//*[@id="awsui-input-1"]`
-	XPathTOTP            = `//*[@id="awsui-input-2"]`
+	BrowserCloseDelay = 300 * time.Second
+	XPathUsername     = `//*[@id="awsui-input-0"]`
+	XPathPassword     = `//*[@id="awsui-input-1"]`
+	XPathTOTP         = `//*[@id="awsui-input-2"]`
+	// XPathDexMFA matches the MFA code field on the AWS "Additional verification
+	// required" page that can appear during the Dex auth-code flow. The field is
+	// targeted by its placeholder rather than a generated awsui-input-N id
+	// because, unlike the device flow, this page is reached by a redirect chain
+	// whose input numbering we don't control. MFA here is conditional — AWS only
+	// prompts sometimes — so this is probed for, not required.
+	XPathDexMFA          = `//input[@placeholder="Enter code"]`
 	XPathAllow1          = `//*[@id="cli_verification_btn"]`
 	XPathAllow2          = `//*[@data-testid="allow-access-button"]`
 	XPathSuccess         = `//*[@data-analytics-alert="success"]`
@@ -258,13 +266,15 @@ func automateBrowserLogin(deviceURL string, config *Config) error {
 	return nil
 }
 
-// performLoginSteps drives the credential, authorization, and success-check
-// stages of the AWS SSO flow on an already-opened page. Every step is bounded
-// by the single --timeout budget.
+// performLoginSteps drives login on an already-opened page. The username and
+// password steps are shared by both flows (both land on the same AWS sign-in
+// form); after that it branches on whether this is the Dex auth-code flow or
+// the AWS device-code flow. Every step is bounded by the single --timeout
+// budget.
 func performLoginSteps(page *rod.Page, config *Config) error {
 	timeout := time.Duration(config.TimeoutSeconds) * time.Second
 
-	// Fill credentials
+	// Fill credentials (shared by both flows)
 	log.Info("Filling AWS SSO credentials...")
 	if err := fillAndSubmitField(page, XPathUsername, config.Username, "username field", timeout); err != nil {
 		return err
@@ -274,6 +284,16 @@ func performLoginSteps(page *rod.Page, config *Config) error {
 		return err
 	}
 
+	if config.DexURL != "" {
+		return performDexAuthSteps(page, config, timeout)
+	}
+	return performDeviceAuthSteps(page, config, timeout)
+}
+
+// performDeviceAuthSteps completes the AWS device-code flow: a mandatory 2FA
+// step, then the two "Allow" authorization clicks, then the on-page success
+// check. This is the original AWS SSO behavior.
+func performDeviceAuthSteps(page *rod.Page, config *Config, timeout time.Duration) error {
 	// Get 2FA code and submit
 	twoFA, err := get2FACode(config)
 	if err != nil {
@@ -304,6 +324,110 @@ func performLoginSteps(page *rod.Page, config *Config) error {
 	}
 
 	return nil
+}
+
+// performDexAuthSteps completes the Dex OIDC auth-code flow after credentials
+// are submitted. Unlike the device flow there are no "Allow" buttons and 2FA is
+// conditional: AWS sometimes shows an "Additional verification required" page
+// and sometimes redirects straight to the local callback. So we probe for
+// whichever happens first — the MFA field or the callback redirect — and only
+// fill 2FA when the MFA page actually appears. Success is the browser reaching
+// the redirect_uri (argocd's local callback server), not an on-page element.
+func performDexAuthSteps(page *rod.Page, config *Config, timeout time.Duration) error {
+	prefix, err := dexCallbackPrefix(config.DexURL)
+	if err != nil {
+		return err
+	}
+
+	log.Info("Waiting for MFA prompt or login callback...", "callbackPrefix", prefix)
+	mfaNeeded, err := waitForMFAOrCallback(page, prefix, timeout)
+	if err != nil {
+		return err
+	}
+
+	if !mfaNeeded {
+		log.Info("No MFA required; login callback reached")
+		return nil
+	}
+
+	log.Info("MFA required; submitting 2FA code...")
+	twoFA, err := get2FACode(config)
+	if err != nil {
+		return fmt.Errorf("failed to get 2FA code: %v", err)
+	}
+
+	if err := fillAndSubmitField(page, XPathDexMFA, twoFA, "MFA code field", timeout); err != nil {
+		return err
+	}
+
+	log.Info("Waiting for login callback...", "callbackPrefix", prefix)
+	return waitForCallback(page, prefix, timeout)
+}
+
+// dexCallbackPrefix extracts the origin (scheme + host) of the Dex URL's
+// redirect_uri, e.g. "http://localhost:8085". The dex flow waits for the
+// browser's URL to start with this prefix as its success signal. The port is
+// taken from the URL itself so it tracks whatever local port the CLI chose.
+func dexCallbackPrefix(dexURL string) (string, error) {
+	u, err := url.Parse(dexURL)
+	if err != nil {
+		return "", fmt.Errorf("could not parse dex URL: %v", err)
+	}
+	redirect := u.Query().Get("redirect_uri")
+	if redirect == "" {
+		return "", fmt.Errorf("dex URL has no redirect_uri query parameter")
+	}
+	r, err := url.Parse(redirect)
+	if err != nil {
+		return "", fmt.Errorf("could not parse redirect_uri %q: %v", redirect, err)
+	}
+	return r.Scheme + "://" + r.Host, nil
+}
+
+// waitForMFAOrCallback polls, until the timeout, for whichever comes first
+// after the password is submitted: the browser reaching the callback prefix
+// (returns mfaNeeded=false) or the MFA code field appearing (returns
+// mfaNeeded=true). If neither happens before the deadline it returns an error.
+func waitForMFAOrCallback(page *rod.Page, prefix string, timeout time.Duration) (bool, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		info, err := page.Info()
+		if err != nil {
+			return false, fmt.Errorf("failed to read page info: %v", err)
+		}
+		if strings.HasPrefix(info.URL, prefix) {
+			return false, nil
+		}
+
+		has, _, err := page.HasX(XPathDexMFA)
+		if err != nil {
+			return false, fmt.Errorf("failed to probe for MFA field: %v", err)
+		}
+		if has {
+			return true, nil
+		}
+
+		time.Sleep(300 * time.Millisecond)
+	}
+	return false, fmt.Errorf("timed out after %s waiting for MFA prompt or redirect to %s", timeout, prefix)
+}
+
+// waitForCallback polls, until the timeout, for the browser to reach a URL
+// starting with prefix — the redirect to the CLI's local callback server that
+// completes the auth-code flow.
+func waitForCallback(page *rod.Page, prefix string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		info, err := page.Info()
+		if err != nil {
+			return fmt.Errorf("failed to read page info: %v", err)
+		}
+		if strings.HasPrefix(info.URL, prefix) {
+			return nil
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return fmt.Errorf("timed out after %s waiting for redirect to %s", timeout, prefix)
 }
 
 // dumpFailureInfo writes the page HTML, a screenshot, and a metadata summary to

@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A CLI that automates the browser half of `aws sso login --no-browser --use-device-code`. The AWS CLI prints a device URL and then blocks polling `CreateToken`; this tool reads that URL, drives a headless browser (go-rod) through the SSO login + authorization pages, and lets the AWS CLI complete.
+A CLI that automates the browser half of a blocked SSO login. Two cases:
+
+1. `aws sso login --no-browser --use-device-code` — the AWS CLI prints a device URL and blocks polling `CreateToken`; this tool reads that URL, drives a headless browser (go-rod) through the SSO login + authorization pages, and lets the AWS CLI complete.
+2. A Dex OIDC auth-code login such as `argocd login --grpc-web <server> --sso --sso-launch-browser=false` — the CLI starts a local callback server (e.g. `http://localhost:8085/auth/callback`), prints a Dex auth URL, and blocks. Because that Dex instance federates to AWS IAM Identity Center, the browser lands on the **same** AWS sign-in form; this tool fills it and waits for the browser to be redirected back to the local callback, which unblocks the CLI.
+
+The URL flow and source are **always explicit** — there is no implicit stdin default. Pass a literal URL (`--device-url <url>` / `--dex-url <url>`) or `-` to read that flow's URL from stdin (`--device-url -` / `--dex-url -`); the flags are mutually exclusive, and `"-"` is the `StdinURLSource` sentinel. `aws … | awsssologin --device-url -`, `argocd … 2>&1 | awsssologin --dex-url -`.
 
 ## Commands
 
@@ -23,9 +28,9 @@ There is no separate linter beyond `go vet` + `gofmt`.
 
 Three files form a linear pipeline, all in `package main`:
 
-- **main.go** — cobra CLI + stdin handling. Finds the device URL via `deviceURLPattern` regex, or takes `--device-url` directly.
-- **config.go** — credential resolution with strict precedence: **CLI flag → env var (`AWSSSOLOGIN_*`) → interactive prompt**. Interactive prompts only work with `--device-url` (stdin is consumed by the pipe otherwise).
-- **browser.go** — all go-rod automation: fill username/password/2FA, dismiss the cookie banner, click two "Allow" buttons, verify success.
+- **main.go** — cobra CLI + URL routing. The flow (device vs dex) and source (literal vs stdin) are always explicit via the flags: `--device-url`/`--dex-url` take a literal URL, or `-` to read it from stdin (matched by `deviceURLPattern`/`dexURLPattern`). There is no implicit default; bare invocation is an error.
+- **config.go** — credential resolution with strict precedence: **CLI flag → env var (`AWSSSOLOGIN_*`) → interactive prompt**. Interactive prompts work only when a literal URL is given (`--device-url <url>`/`--dex-url <url>`); they're disabled under stdin (`-`), gated by `usesStdin()`, because the pipe owns stdin.
+- **browser.go** — all go-rod automation. Username+password entry is shared; then it branches by flow. **Device flow** (`performDeviceAuthSteps`): mandatory 2FA, dismiss cookie banner, click two "Allow" buttons, verify on-page success element. **Dex flow** (`performDexAuthSteps`, selected by `--dex-url`): no Allow buttons; 2FA is *conditional* — `waitForMFAOrCallback` polls for whichever comes first, the MFA field or the redirect; success is the browser URL reaching the `redirect_uri` origin (the CLI's localhost callback server), not a DOM element. **Caveat:** the no-MFA branch is unverified in practice — go-rod launches an ephemeral browser profile each run, so AWS never sees a remembered device and always challenges MFA. The branch is defensive/correct-by-construction but dormant; only the MFA-required path has been exercised live.
 - **version.go** — `version`/`commit`/`date` vars injected by GoReleaser at release; fall back to `debug.ReadBuildInfo()` for `go install`/`go build`.
 
 ### Two subtleties that drove most recent work
