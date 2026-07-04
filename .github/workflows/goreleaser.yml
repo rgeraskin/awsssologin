@@ -25,7 +25,10 @@ jobs:
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: ~> v2
+          # Pinned: our .goreleaser.yaml still uses the deprecated-but-functional
+          # `brews` (Formula). Do NOT use "~> v2" / "latest" here — a future
+          # release that removes `brews` would break publishing without warning.
+          version: 2.16.0
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
