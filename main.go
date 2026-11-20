@@ -12,7 +12,14 @@ import (
 )
 
 const (
-	DeviceURLRegex = `https://[a-zA-Z0-9-]+\.awsapps\.com/start/#/device\?user_code=[A-Z0-9-]+`
+	// DeviceURLRegex matches the AWS SSO device-code verification URL in either
+	// of the forms AWS has served:
+	//   - legacy: https://<org>.awsapps.com/start/#/device?user_code=ABCD-1234
+	//   - current: https://<region>.signin.aws/platform/authorize?request_uri=<urn>&identitystore_id=d-…
+	// The current form carries an opaque, URL-encoded request_uri instead of the
+	// user code, so its query is matched up to the first whitespace/quote.
+	DeviceURLRegex = `(?:https://[a-zA-Z0-9-]+\.awsapps\.com/start/#/device\?user_code=[A-Z0-9-]+` +
+		`|https://[a-z0-9-]+\.signin\.aws/platform/authorize\?[^\s'"]+)`
 	// DexURLRegex matches a Dex OIDC auth-code URL on a stdin line. It is keyed
 	// on the redirect_uri query parameter (always present in the auth-code flow,
 	// and what the dex flow waits on) rather than a fixed host, so it works for

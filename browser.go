@@ -29,10 +29,20 @@ const (
 	// because, unlike the device flow, this page is reached by a redirect chain
 	// whose input numbering we don't control. MFA here is conditional — AWS only
 	// prompts sometimes — so this is probed for, not required.
-	XPathDexMFA          = `//input[@placeholder="Enter code"]`
-	XPathAllow1          = `//*[@id="cli_verification_btn"]`
-	XPathAllow2          = `//*[@data-testid="allow-access-button"]`
-	XPathSuccess         = `//*[@data-analytics-alert="success"]`
+	XPathDexMFA = `//input[@placeholder="Enter code"]`
+	// XPathAllow1 matches the first consent button: the legacy awsapps.com
+	// "Confirm and continue" (#cli_verification_btn), or the same step on the
+	// signin.aws "Authorization Request" page. The latter has no stable id —
+	// only the generic awsui data-testid="test-primary-button" that other AWS
+	// form pages (e.g. MFA) also use — so it is matched by its label to avoid
+	// clicking a stale primary button during the page transition.
+	XPathAllow1 = `//*[@id="cli_verification_btn"]` +
+		` | //button[normalize-space(.)="Confirm and continue"]`
+	XPathAllow2 = `//*[@data-testid="allow-access-button"]`
+	// XPathSuccess matches the "Request Approved" confirmation on either the
+	// legacy awsapps.com page or the current signin.aws consent page.
+	XPathSuccess = `//*[@data-analytics-alert="success"]` +
+		` | //*[@data-testid="consent-success-component"]`
 	CookieAcceptSelector = `[data-id="awsccc-cb-btn-accept"]`
 	// CookieBannerTimeout bounds waiting for the consent banner to appear,
 	// animate in, and disappear. The banner reliably shows on the authorization
@@ -57,8 +67,9 @@ const diagJS = `() => {
     dataId: n.dataset ? n.dataset.id || null : null,
   } : null;
   const out = [];
-  for (const sel of ['#cli_verification_btn', '[data-testid="allow-access-button"]']) {
-    const el = document.querySelector(sel);
+  const byText = t => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === t) || null;
+  for (const sel of ['#cli_verification_btn', 'button:text("Confirm and continue")', '[data-testid="allow-access-button"]']) {
+    const el = sel.startsWith('button:text(') ? byText(sel.slice(13, -2)) : document.querySelector(sel);
     if (!el) { out.push({sel, found: false}); continue; }
     const cs = getComputedStyle(el);
     const r = el.getBoundingClientRect();
@@ -291,8 +302,8 @@ func performLoginSteps(page *rod.Page, config *Config) error {
 }
 
 // performDeviceAuthSteps completes the AWS device-code flow: a mandatory 2FA
-// step, then the two "Allow" authorization clicks, then the on-page success
-// check. This is the original AWS SSO behavior.
+// step, the "Confirm and continue" consent click, a conditional second "Allow
+// access" click, then the on-page success check.
 func performDeviceAuthSteps(page *rod.Page, config *Config, timeout time.Duration) error {
 	// Get 2FA code and submit
 	twoFA, err := get2FACode(config)
@@ -314,6 +325,19 @@ func performDeviceAuthSteps(page *rod.Page, config *Config, timeout time.Duratio
 		return err
 	}
 
+	// The second "Allow access" page is conditional: AWS shows it only until the
+	// CLI's client app (e.g. botocore-client-<session>) has been granted access
+	// once, and skips straight to "Request Approved" on later logins.
+	allowNeeded, err := waitForAllowOrSuccess(page, timeout)
+	if err != nil {
+		return err
+	}
+	if !allowNeeded {
+		log.Debug("Second Allow page skipped; access already granted to this client")
+		log.Debug("Success message found")
+		return nil
+	}
+
 	if err := clickButton(page, XPathAllow2, "second Allow button", timeout); err != nil {
 		return err
 	}
@@ -324,6 +348,33 @@ func performDeviceAuthSteps(page *rod.Page, config *Config, timeout time.Duratio
 	}
 
 	return nil
+}
+
+// waitForAllowOrSuccess polls, until the timeout, for whichever comes first
+// after the first consent click: the second Allow button (returns
+// allowNeeded=true) or the success element (returns allowNeeded=false).
+func waitForAllowOrSuccess(page *rod.Page, timeout time.Duration) (bool, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		has, _, err := page.HasX(XPathAllow2)
+		if err != nil {
+			return false, fmt.Errorf("failed to probe for second Allow button: %v", err)
+		}
+		if has {
+			return true, nil
+		}
+
+		has, _, err = page.HasX(XPathSuccess)
+		if err != nil {
+			return false, fmt.Errorf("failed to probe for success message: %v", err)
+		}
+		if has {
+			return false, nil
+		}
+
+		time.Sleep(300 * time.Millisecond)
+	}
+	return false, fmt.Errorf("timed out after %s waiting for second Allow button or success message", timeout)
 }
 
 // performDexAuthSteps completes the Dex OIDC auth-code flow after credentials

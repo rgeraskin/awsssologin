@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Device-code login with AWS's new sign-in pages. `aws sso login` now prints a
+  `https://<region>.signin.aws/platform/authorize?request_uri=…` URL, which was not
+  recognized, so piped runs hung until the device code expired. The new consent
+  ("Confirm and continue") and success elements are now matched too, and the second
+  "Allow access" page is treated as optional since AWS skips it once the CLI's
+  client app has been granted. The legacy `awsapps.com` pages still work.
+
 ## [0.4.0] - 2026-06-17
 
 ### Added

@@ -147,9 +147,11 @@ The tool uses specific XPath selectors optimized for AWS SSO pages:
 - Username field: `//*[@id="awsui-input-0"]`
 - Password field: `//*[@id="awsui-input-1"]`
 - 2FA input field: `//*[@id="awsui-input-2"]`
-- First Allow button: `//*[@id="cli_verification_btn"]`
-- Second Allow button: `//*[@data-testid="allow-access-button"]`
-- Success message: `//*[@data-analytics-alert="success"]`
+- First consent button: `//*[@id="cli_verification_btn"]` (legacy) or `//button[normalize-space(.)="Confirm and continue"]`
+- Second Allow button: `//*[@data-testid="allow-access-button"]` — only shown until the CLI's client app has been granted access once; skipped afterwards
+- Success message: `//*[@data-analytics-alert="success"]` (legacy) or `//*[@data-testid="consent-success-component"]`
+
+Both the legacy device URL (`https://<org>.awsapps.com/start/#/device?user_code=…`) and the current one (`https://<region>.signin.aws/platform/authorize?request_uri=…`) are recognized.
 
 The Dex auth-code flow (`--dex-url`) shares the username/password fields but differs after that:
 - It submits the MFA code when the verification page appears (field `//input[@placeholder="Enter code"]`)
