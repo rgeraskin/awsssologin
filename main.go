@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
+	"strings"
 
 	"github.com/charmbracelet/log"
 
@@ -36,6 +38,9 @@ var (
 	deviceURLPattern           = regexp.MustCompile(DeviceURLRegex)
 	deviceURLValidationPattern = regexp.MustCompile("^" + DeviceURLRegex + "$")
 	dexURLPattern              = regexp.MustCompile(DexURLRegex)
+	// userCodePattern matches the user code line of the AWS CLI's device-code
+	// prompt, e.g. "ZXCF-DCHG".
+	userCodePattern = regexp.MustCompile(`^[A-Z0-9]{4,}-[A-Z0-9]{4,}$`)
 )
 
 func main() {
@@ -157,24 +162,51 @@ func runSSO(config *Config) error {
 	// On success, drain the remaining AWS CLI output so it can finish writing
 	// the token without a broken pipe.
 	if scanner != nil {
-		continueReadingStdin(scanner)
+		var skip func(string) bool
+		if config.DexURL == "" {
+			skip = func(line string) bool { return isDevicePromptLine(line, deviceURL) }
+		}
+		continueReadingStdin(scanner, os.Stdout, skip)
 	}
 
 	log.Info("AWS SSO login completed successfully!")
 	return nil
 }
 
-func continueReadingStdin(scanner *bufio.Scanner) {
+// continueReadingStdin forwards the upstream CLI's remaining output to w. If
+// skipPrompt is non-nil, leading lines it matches are dropped: the rest of the
+// login prompt that followed the matched URL is stale once the browser step has
+// succeeded. Filtering stops at the first line that is forwarded, so later
+// output is never swallowed.
+func continueReadingStdin(scanner *bufio.Scanner, w io.Writer, skipPrompt func(string) bool) {
 	log.Debug("Reading remaining AWS CLI output...")
+	inPrompt := skipPrompt != nil
 	for scanner.Scan() {
 		line := scanner.Text()
-		// log.Debug("AWS output: %s", line)
-		fmt.Println(line) // Forward to user
+		if inPrompt && skipPrompt(line) {
+			continue
+		}
+		inPrompt = false
+		fmt.Fprintln(w, line) // Forward to user
 	}
 
 	if err := scanner.Err(); err != nil {
 		log.Errorf("failed to read remaining AWS CLI output: %v", err)
 	}
+}
+
+// isDevicePromptLine reports whether line belongs to the tail of the AWS CLI
+// device-code prompt. The current signin.aws URL is printed twice — first under
+// "Please visit the following URL:", then after "Alternatively, …" — and the
+// first copy is what matches, so the code and the second copy follow it. (With
+// the legacy awsapps.com URL only the last line matched, leaving nothing here.)
+func isDevicePromptLine(line, matchedURL string) bool {
+	t := strings.TrimSpace(line)
+	return t == "" ||
+		t == "Then enter the code:" ||
+		userCodePattern.MatchString(t) ||
+		strings.HasPrefix(t, "Alternatively, you may visit") ||
+		strings.Contains(t, matchedURL)
 }
 
 // readURLFromStdin scans stdin line by line for the first URL matching pattern

@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ("Confirm and continue") and success elements are now matched too, and the second
   "Allow access" page is treated as optional since AWS skips it once the CLI's
   client app has been granted. The legacy `awsapps.com` pages still work.
+- Stale device-code prompt ("Then enter the code: …", the code, and the repeated
+  URL) no longer echoed after a successful login with the new sign-in pages.
 
 ## [0.4.0] - 2026-06-17
 
